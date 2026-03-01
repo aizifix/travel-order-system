@@ -148,7 +148,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
                 <button
                   type="submit"
-                  className="mt-[16px] inline-flex h-[47px] w-full items-center justify-center rounded-[9px] bg-[#78AA37] text-sm font-semibold text-white transition-colors hover:bg-[#179953] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1CB061]/30 cursor-pointer"
+                  className="mt-[16px] inline-flex h-[47px] w-full items-center justify-center rounded-[9px] bg-[#3B9F41] text-sm font-semibold text-white transition-colors hover:bg-[#359436] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1CB061]/30 cursor-pointer"
                 >
                   SIGN ME IN
                 </button>

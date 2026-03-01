@@ -1,5 +1,6 @@
 import { requireRole } from "@/src/server/auth/guards";
 import { getAdminDashboardStats } from "@/src/server/dashboard/admin";
+import { getUserWithDivision } from "@/src/server/auth/service";
 import { AdminShell, NotificationBellButton } from "@/src/components/admin/admin-shell";
 import {
   AdminDashboardView,
@@ -39,7 +40,19 @@ const PREVIEW_RECENT_ORDERS = [
 export default async function AdminDashboardPage() {
   const session = await requireRole("admin");
   const stats = await getAdminDashboardStats();
+  const userData = await getUserWithDivision(session.userId);
   const inactiveUsers = Math.max(stats.totalUsers - stats.activeUsers, 0);
+
+  const now = new Date();
+  const dateTimeStr = now.toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  }) + " | " + now.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 
   const metrics: readonly AdminDashboardMetric[] = [
     {
@@ -64,10 +77,21 @@ export default async function AdminDashboardPage() {
       title="Dashboard"
       activeItem="dashboard"
       headerAction={<NotificationBellButton count={3} />}
+      user={
+        userData
+          ? {
+              name: `${userData.firstName} ${userData.lastName}`.trim(),
+              role: userData.role.charAt(0).toUpperCase() + userData.role.slice(1),
+              division: userData.division ?? "No Division Assigned",
+            }
+          : undefined
+      }
     >
       <AdminDashboardView
-        displayName={session.displayName}
+        firstName={userData?.firstName ?? ""}
+        lastName={userData?.lastName ?? ""}
         email={session.email}
+        currentDateTime={dateTimeStr}
         metrics={metrics}
         recentOrders={PREVIEW_RECENT_ORDERS}
       />

@@ -1,27 +1,107 @@
 import { requireRole } from "@/src/server/auth/guards";
+import { getUserWithDivision } from "@/src/server/auth/service";
+import { NotificationBellButton } from "@/src/components/admin/notification-bell-button";
+import { ApproverShell } from "@/src/components/approver/approver-shell";
+import {
+  ApproverDashboardView,
+  type ApproverDashboardMetric,
+} from "@/src/components/approver/dashboard/approver-dashboard-view";
+import {
+  getApproverDashboardStats,
+  getApproverPendingNotifications,
+  getTravelOrdersForApprover,
+} from "@/src/server/travel-orders/service";
+
+export const dynamic = "force-dynamic";
 
 export default async function ApproverDashboardPage() {
   const session = await requireRole("approver");
 
+  const [userData, stats, recentOrders, notifications] = await Promise.all([
+    getUserWithDivision(session.userId),
+    getApproverDashboardStats(session.userId),
+    getTravelOrdersForApprover(session.userId, 6),
+    getApproverPendingNotifications(session.userId, 8),
+  ]);
+
+  const now = new Date();
+  const dateTimeStr =
+    now.toLocaleDateString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    }) +
+    " | " +
+    now.toLocaleTimeString("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+  const metrics: readonly ApproverDashboardMetric[] = [
+    {
+      label: "Total Assigned",
+      value: stats.totalAssigned,
+      tone: "warning",
+    },
+    {
+      label: "Pending Step 1",
+      value: stats.pendingOrders,
+      tone: "warning",
+    },
+    {
+      label: "Forwarded to Admin",
+      value: stats.forwardedOrders,
+      tone: "success",
+    },
+    {
+      label: "Rejected",
+      value: stats.rejectedOrders,
+      tone: "danger",
+    },
+  ];
+
   return (
-    <main className="min-h-screen bg-zinc-50 p-6">
-      <div className="mx-auto max-w-3xl rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">
-          Approver Dashboard (Placeholder)
-        </h1>
-        <p className="mt-2 text-sm text-zinc-600">
-          Signed in as {session.email}. Approver pages are not implemented yet.
-        </p>
-        <form action="/api/auth/logout" method="post" className="mt-4">
-          <button
-            type="submit"
-            className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100"
-          >
-            Logout
-          </button>
-        </form>
-      </div>
-    </main>
+    <ApproverShell
+      title="Dashboard"
+      activeItem="dashboard"
+      headerAction={
+        <NotificationBellButton
+          count={notifications.length}
+          items={notifications.map((item) => ({
+            id: `pending-${item.id}`,
+            title: `${item.orderNo} needs your step-1 review`,
+            description: `${item.requestedBy} - ${item.destination}`,
+            timestampLabel: `Posted ${item.orderDateLabel}`,
+            href: `/approver/travel-orders?travelOrderId=${item.id}`,
+          }))}
+          emptyMessage="No pending step-1 requests."
+        />
+      }
+      user={
+        userData
+          ? {
+              name: `${userData.firstName} ${userData.lastName}`.trim(),
+              role: userData.role.charAt(0).toUpperCase() + userData.role.slice(1),
+              division: userData.division ?? "No Division Assigned",
+            }
+          : undefined
+      }
+    >
+      <ApproverDashboardView
+        fullName={`${userData?.firstName ?? ""} ${userData?.lastName ?? ""}`.trim()}
+        currentDateTime={dateTimeStr}
+        metrics={metrics}
+        recentOrders={recentOrders.map((order) => ({
+          id: order.id,
+          orderNo: order.orderNo,
+          requestedBy: order.requestedBy,
+          destination: order.destination,
+          departureDateLabel: order.departureDateLabel,
+          returnDateLabel: order.returnDateLabel,
+          status: order.status,
+        }))}
+      />
+    </ApproverShell>
   );
 }
-

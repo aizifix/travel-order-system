@@ -1,26 +1,99 @@
+import Link from "next/link";
 import { requireRole } from "@/src/server/auth/guards";
+import { getUserWithDivision } from "@/src/server/auth/service";
+import {
+  getRegularDashboardStats,
+  getTravelOrdersForRequester,
+} from "@/src/server/travel-orders/service";
+import { RegularShell } from "@/src/components/regular/regular-shell";
+import {
+  RegularDashboardView,
+  type RegularDashboardMetric,
+} from "@/src/components/regular/dashboard/regular-dashboard-view";
+
+export const dynamic = "force-dynamic";
 
 export default async function RegularDashboardPage() {
   const session = await requireRole("regular");
 
+  const [userData, stats, recentOrders] = await Promise.all([
+    getUserWithDivision(session.userId),
+    getRegularDashboardStats(session.userId),
+    getTravelOrdersForRequester(session.userId, 6),
+  ]);
+
+  const now = new Date();
+  const dateTimeStr =
+    now.toLocaleDateString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    }) +
+    " | " +
+    now.toLocaleTimeString("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+  const metrics: readonly RegularDashboardMetric[] = [
+    {
+      label: "Total Orders",
+      value: stats.totalOrders,
+      tone: "warning",
+    },
+    {
+      label: "Pending Approval",
+      value: stats.pendingOrders,
+      tone: "warning",
+    },
+    {
+      label: "Approved",
+      value: stats.approvedOrders,
+      tone: "success",
+    },
+    {
+      label: "Returned / Rejected",
+      value: stats.returnedOrders + stats.rejectedOrders,
+      tone: "danger",
+    },
+  ];
+
   return (
-    <main className="min-h-screen bg-zinc-50 p-6">
-      <div className="mx-auto max-w-3xl rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">
-          Regular User Dashboard (Placeholder)
-        </h1>
-        <p className="mt-2 text-sm text-zinc-600">
-          Signed in as {session.email}. Regular-user pages are not implemented yet.
-        </p>
-        <form action="/api/auth/logout" method="post" className="mt-4">
-          <button
-            type="submit"
-            className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100"
-          >
-            Logout
-          </button>
-        </form>
-      </div>
-    </main>
+    <RegularShell
+      title="Dashboard"
+      activeItem="dashboard"
+      headerAction={
+        <Link
+          href="/regular/travel-orders"
+          className="inline-flex items-center rounded-lg bg-[#3B9F41] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#359436]"
+        >
+          + Create Travel Order
+        </Link>
+      }
+      user={
+        userData
+          ? {
+              name: `${userData.firstName} ${userData.lastName}`.trim(),
+              role: userData.role.charAt(0).toUpperCase() + userData.role.slice(1),
+              division: userData.division ?? "No Division Assigned",
+            }
+          : undefined
+      }
+    >
+      <RegularDashboardView
+        fullName={`${userData?.firstName ?? ""} ${userData?.lastName ?? ""}`.trim()}
+        currentDateTime={dateTimeStr}
+        metrics={metrics}
+        recentOrders={recentOrders.map((order) => ({
+          id: order.id,
+          orderNo: order.orderNo,
+          destination: order.destination,
+          departureDateLabel: order.departureDateLabel,
+          returnDateLabel: order.returnDateLabel,
+          status: order.status,
+        }))}
+      />
+    </RegularShell>
   );
 }
