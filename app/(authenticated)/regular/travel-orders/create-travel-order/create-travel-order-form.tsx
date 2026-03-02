@@ -323,6 +323,7 @@ export default function CreateTravelOrderForm({
                 name="objectives"
                 label="Objective(s)"
                 rows={3}
+                maxLength={120}
                 disabled={!canSubmit}
               />
               <TextareaField
@@ -337,6 +338,7 @@ export default function CreateTravelOrderForm({
                 label="Specific Purpose"
                 rows={4}
                 required
+                maxLength={120}
                 disabled={!canSubmit}
               />
               <InputField
@@ -504,22 +506,43 @@ function TextareaField({
   rows,
   required,
   disabled,
+  maxLength,
 }: Readonly<{
   name: string;
   label: string;
   rows: number;
   required?: boolean;
   disabled?: boolean;
+  maxLength?: number;
 }>) {
+  const [charCount, setCharCount] = useState(0);
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setCharCount(e.target.value.length);
+  };
+
   return (
     <FieldWrapper label={label}>
-      <textarea
-        name={name}
-        rows={rows}
-        required={required}
-        disabled={disabled}
-        className="w-full rounded-lg border border-[#dfe1ed] bg-white px-3 py-2 text-sm text-[#2f3339] outline-none focus:border-[#3B9F41] focus:ring-1 focus:ring-[#3B9F41] disabled:cursor-not-allowed disabled:bg-[#f8f9fc] disabled:text-[#8b92a7] resize-none"
-      />
+      <div className="relative">
+        <textarea
+          name={name}
+          rows={rows}
+          required={required}
+          disabled={disabled}
+          onChange={handleChange}
+          maxLength={maxLength}
+          className="w-full rounded-lg border border-[#dfe1ed] bg-white px-3 py-2 text-sm text-[#2f3339] outline-none focus:border-[#3B9F41] focus:ring-1 focus:ring-[#3B9F41] disabled:cursor-not-allowed disabled:bg-[#f8f9fc] disabled:text-[#8b92a7] resize-none"
+        />
+        {maxLength && (
+          <div
+            className={`mt-1 text-xs ${
+              charCount > maxLength ? "text-red-500" : charCount > maxLength * 0.9 ? "text-amber-500" : "text-[#7d8598]"
+            }`}
+          >
+            {charCount}/{maxLength} characters
+          </div>
+        )}
+      </div>
     </FieldWrapper>
   );
 }
