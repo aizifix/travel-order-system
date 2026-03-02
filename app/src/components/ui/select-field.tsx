@@ -15,6 +15,7 @@ interface SelectFieldProps {
   disabled?: boolean;
   includeEmptyOption?: boolean;
   emptyOptionLabel?: string;
+  defaultValue?: number | string | null;
 }
 
 export function SelectField({
@@ -24,10 +25,19 @@ export function SelectField({
   disabled,
   includeEmptyOption,
   emptyOptionLabel = "None / Not Applicable",
+  defaultValue,
 }: SelectFieldProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const [selectedValue, setSelectedValue] = useState<string>("");
+  const [selectedValue, setSelectedValue] = useState<string>(() => {
+    if (defaultValue != null && String(defaultValue).trim() !== "") {
+      return String(defaultValue);
+    }
+    if (!includeEmptyOption && options.length > 0) {
+      return String(options[0].id);
+    }
+    return "";
+  });
   const containerRef = useRef<HTMLDivElement>(null);
 
   const filteredOptions = options.filter((option) =>
@@ -86,7 +96,7 @@ export function SelectField({
       >
         <span className="truncate">{displayText}</span>
         <div className="flex items-center gap-1">
-          {(selectedValue || includeEmptyOption) && !disabled && (
+          {includeEmptyOption && !disabled && selectedValue && (
             <X
               className="h-3.5 w-3.5 text-[#9ca3af] hover:text-[#6b7280]"
               onClick={(e) => {

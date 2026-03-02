@@ -41,6 +41,27 @@ export function RegularTravelOrdersView({
 }: RegularTravelOrdersViewProps) {
   return (
     <div className="space-y-4">
+      {feedback ? (
+        <section
+          className={`rounded-lg border px-4 py-3 text-sm ${
+            feedback.type === "error"
+              ? "border-[#ffcece] bg-[#fff3f3] text-[#a33a3a]"
+              : "border-[#bde7c7] bg-[#f2fcf4] text-[#256f3a]"
+          }`}
+          role="status"
+          aria-live="polite"
+        >
+          {feedback.text}
+        </section>
+      ) : null}
+
+      {!profile ? (
+        <section className="rounded-lg border border-[#ffcece] bg-[#fff3f3] px-4 py-3 text-sm text-[#a33a3a]">
+          Your requester profile is incomplete. Contact an administrator before
+          creating a travel order.
+        </section>
+      ) : null}
+
       <section className="rounded-2xl border border-[#dfe1ed] bg-white p-5 sm:p-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>

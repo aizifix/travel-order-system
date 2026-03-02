@@ -1,6 +1,5 @@
 import { requireRole } from "@/src/server/auth/guards";
 import { getUserWithDivision } from "@/src/server/auth/service";
-import { NotificationBellButton } from "@/src/components/admin/notification-bell-button";
 import { ApproverShell } from "@/src/components/approver/approver-shell";
 import {
   ApproverDashboardView,
@@ -8,7 +7,6 @@ import {
 } from "@/src/components/approver/dashboard/approver-dashboard-view";
 import {
   getApproverDashboardStats,
-  getApproverPendingNotifications,
   getTravelOrdersForApprover,
 } from "@/src/server/travel-orders/service";
 
@@ -17,11 +15,10 @@ export const dynamic = "force-dynamic";
 export default async function ApproverDashboardPage() {
   const session = await requireRole("approver");
 
-  const [userData, stats, recentOrders, notifications] = await Promise.all([
+  const [userData, stats, recentOrders] = await Promise.all([
     getUserWithDivision(session.userId),
     getApproverDashboardStats(session.userId),
     getTravelOrdersForApprover(session.userId, 6),
-    getApproverPendingNotifications(session.userId, 8),
   ]);
 
   const now = new Date();
@@ -65,19 +62,6 @@ export default async function ApproverDashboardPage() {
     <ApproverShell
       title="Dashboard"
       activeItem="dashboard"
-      headerAction={
-        <NotificationBellButton
-          count={notifications.length}
-          items={notifications.map((item) => ({
-            id: `pending-${item.id}`,
-            title: `${item.orderNo} needs your step-1 review`,
-            description: `${item.requestedBy} - ${item.destination}`,
-            timestampLabel: `Posted ${item.orderDateLabel}`,
-            href: `/approver/travel-orders?travelOrderId=${item.id}`,
-          }))}
-          emptyMessage="No pending step-1 requests."
-        />
-      }
       user={
         userData
           ? {

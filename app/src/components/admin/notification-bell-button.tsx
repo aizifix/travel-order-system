@@ -17,19 +17,20 @@ type NotificationBellButtonProps = Readonly<{
   count?: number;
   items?: readonly NotificationBellItem[];
   emptyMessage?: string;
+  onOpenChange?: (isOpen: boolean) => void;
+  onItemClick?: (itemId: string) => void;
 }>;
 
 export function NotificationBellButton({
   count,
   items = [],
   emptyMessage = "No notifications yet.",
+  onOpenChange,
+  onItemClick,
 }: NotificationBellButtonProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const [hasBeenOpened, setHasBeenOpened] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const panelId = useId();
-  const notificationCount =
-    typeof count === "number" && !hasBeenOpened ? count : 0;
 
   useEffect(() => {
     if (!isOpen) {
@@ -60,9 +61,12 @@ export function NotificationBellButton({
     };
   }, [isOpen]);
 
+  useEffect(() => {
+    onOpenChange?.(isOpen);
+  }, [isOpen, onOpenChange]);
+
   const handleBellClick = () => {
     setIsOpen((prev) => !prev);
-    setHasBeenOpened(true);
   };
 
   return (
@@ -77,9 +81,9 @@ export function NotificationBellButton({
         onClick={handleBellClick}
       >
         <Bell className="h-6 w-6" aria-hidden="true" />
-        {notificationCount > 0 && (
+        {typeof count === "number" && count > 0 && (
           <span className="absolute -right-0.5 -top-0.5 inline-flex min-h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[10px] font-bold leading-none text-white shadow-sm">
-            {notificationCount > 99 ? "99+" : notificationCount}
+            {count > 99 ? "99+" : count}
           </span>
         )}
       </button>
@@ -95,7 +99,13 @@ export function NotificationBellButton({
             <ul className="max-h-80 space-y-1 overflow-y-auto p-2">
               {items.map((item) => (
                 <li key={item.id}>
-                  <NotificationItem item={item} />
+                  <NotificationItem
+                    item={item}
+                    onSelect={() => {
+                      onItemClick?.(item.id);
+                      setIsOpen(false);
+                    }}
+                  />
                 </li>
               ))}
             </ul>
@@ -110,7 +120,13 @@ export function NotificationBellButton({
   );
 }
 
-function NotificationItem({ item }: Readonly<{ item: NotificationBellItem }>) {
+function NotificationItem({
+  item,
+  onSelect,
+}: Readonly<{
+  item: NotificationBellItem;
+  onSelect: () => void;
+}>) {
   const content = (
     <div className="flex items-start gap-3">
       {item.isNew && (
@@ -135,6 +151,7 @@ function NotificationItem({ item }: Readonly<{ item: NotificationBellItem }>) {
       <Link
         href={item.href}
         className="block rounded-lg px-3 py-2.5 transition hover:bg-gray-50"
+        onClick={onSelect}
       >
         {content}
       </Link>
@@ -142,7 +159,7 @@ function NotificationItem({ item }: Readonly<{ item: NotificationBellItem }>) {
   }
 
   return (
-    <div className="rounded-lg px-3 py-2.5">
+    <div className="rounded-lg px-3 py-2.5" onClick={onSelect}>
       {content}
     </div>
   );

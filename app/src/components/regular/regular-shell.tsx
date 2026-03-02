@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { NotificationBellButton } from "@/src/components/admin/notification-bell-button";
+import { LiveNotificationBell } from "@/src/components/notifications/live-notification-bell";
 import {
   RoleShell,
   type RoleShellNavItem,
@@ -47,7 +47,7 @@ export function RegularShell({
       title={title}
       activeItem={activeItem}
       user={user}
-      headerAction={headerAction ?? <NotificationBellButton />}
+      headerAction={headerAction ?? <LiveNotificationBell role="regular" />}
       overviewItems={OVERVIEW_ITEMS}
       toolItems={TOOL_ITEMS}
     >

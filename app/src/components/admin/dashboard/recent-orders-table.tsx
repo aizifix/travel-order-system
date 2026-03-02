@@ -19,7 +19,7 @@ export function RecentTravelOrdersTable({
   rows,
 }: RecentTravelOrdersTableProps) {
   return (
-    <div className="overflow-x-auto rounded-2xl border border-[#dfe1ed] bg-white">
+    <div className="overflow-x-auto rounded-2xl border border-[#dfe1ed] bg-white w-full">
       <table className="min-w-[860px] w-full border-collapse text-left">
         <thead className="bg-[#f3f5fa] text-[#5d6780]">
           <tr className="border-b border-[#cfd4e2]">

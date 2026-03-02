@@ -73,10 +73,7 @@ export default async function RegularTravelOrderCreatePage() {
           }
           lookups={lookups}
           canSubmit={canSubmit}
-          onSubmit={async (formData: FormData) => {
-            "use server";
-            await createRegularTravelOrderAction(formData);
-          }}
+          onSubmit={createRegularTravelOrderAction}
         />
       </div>
     </RegularShell>

@@ -361,7 +361,7 @@ export function RegularTravelOrdersTable({
       </div>
 
       {/* Table */}
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto w-full">
         <table className="w-full border-collapse text-left">
           <thead className="sticky top-0 z-10 bg-[#f3f5fa] text-[#5d6780]">
             <tr className="border-b border-[#cfd4e2]">

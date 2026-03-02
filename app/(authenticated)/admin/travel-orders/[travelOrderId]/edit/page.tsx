@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { requireRole } from "@/src/server/auth/guards";
 import { getUserWithDivision } from "@/src/server/auth/service";
-import { AdminShell, NotificationBellButton } from "@/src/components/admin/admin-shell";
+import { AdminShell } from "@/src/components/admin/admin-shell";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +24,6 @@ export default async function AdminTravelOrderEditPage({
     <AdminShell
       title={`Edit TO #${resolvedParams.travelOrderId}`}
       activeItem="travel-orders"
-      headerAction={<NotificationBellButton count={3} />}
       user={
         userData
           ? {

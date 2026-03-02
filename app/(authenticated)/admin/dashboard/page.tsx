@@ -1,7 +1,7 @@
 import { requireRole } from "@/src/server/auth/guards";
 import { getAdminDashboardStats } from "@/src/server/dashboard/admin";
 import { getUserWithDivision } from "@/src/server/auth/service";
-import { AdminShell, NotificationBellButton } from "@/src/components/admin/admin-shell";
+import { AdminShell } from "@/src/components/admin/admin-shell";
 import {
   AdminDashboardView,
   type AdminDashboardMetric,
@@ -76,7 +76,6 @@ export default async function AdminDashboardPage() {
     <AdminShell
       title="Dashboard"
       activeItem="dashboard"
-      headerAction={<NotificationBellButton count={3} />}
       user={
         userData
           ? {

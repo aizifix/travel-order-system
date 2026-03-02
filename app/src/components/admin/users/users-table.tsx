@@ -155,8 +155,8 @@ export function UsersTable({ rows, pagination }: UsersTableProps) {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-2xl border border-[#dfe1ed] bg-white">
-        <div className="overflow-x-auto overflow-y-auto max-h-[calc(100vh-320px)] scrollbar-hide">
+<div className="rounded-2xl border border-[#dfe1ed] bg-white">
+        <div className="overflow-x-auto overflow-y-auto max-h-[calc(100vh-320px)] scrollbar-hide w-full">
           <table className="min-w-[900px] w-full border-collapse text-left">
             <thead className="bg-[#f3f5fa] text-[#5d6780] sticky top-0 z-10">
               <tr className="border-b border-[#cfd4e2]">

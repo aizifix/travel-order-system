@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { NotificationBellButton } from "@/src/components/admin/notification-bell-button";
+import { LiveNotificationBell } from "@/src/components/notifications/live-notification-bell";
 import {
   RoleShell,
   type RoleShellNavItem,
@@ -61,7 +61,7 @@ export function AdminShell({
       title={title}
       activeItem={activeItem}
       user={user}
-      headerAction={headerAction ?? <NotificationBellButton />}
+      headerAction={headerAction ?? <LiveNotificationBell role="admin" />}
       overviewItems={OVERVIEW_ITEMS}
       toolItems={TOOL_ITEMS}
     >
@@ -69,5 +69,4 @@ export function AdminShell({
     </RoleShell>
   );
 }
-
-export { NotificationBellButton };
+export { NotificationBellButton } from "@/src/components/admin/notification-bell-button";

@@ -1,5 +1,10 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { getDbPool } from "@/src/server/db/mysql";
+import type { NotificationType } from "@/src/server/notifications/model";
+import {
+  createAndPush,
+  pushTravelOrderStatusChanged,
+} from "@/src/server/notifications/service";
 
 const DRAFT_STATUS_ID = 1;
 const PENDING_STATUS_ID = 2;
@@ -200,12 +205,16 @@ type RequesterOwnedTravelOrderRow = RowDataPacket & {
   travel_order_id: number;
   travel_order_no: string;
   travel_status_id: number;
+  requester_user_id: number;
+  recommending_approver_id: number | null;
 };
 
 type ApproverOwnedTravelOrderRow = RowDataPacket & {
   travel_order_id: number;
   travel_order_no: string;
   travel_status_id: number;
+  requester_user_id: number;
+  recommending_approver_id: number | null;
 };
 
 export type TravelOrderApprovalAction = "APPROVED" | "REJECTED" | "RETURNED";
@@ -320,6 +329,15 @@ type ApproverPendingNotificationRow = RowDataPacket & {
   travel_order_date_label: string | null;
 };
 
+type TravelOrderNotificationPayload = Readonly<{
+  userId: number;
+  travelOrderId: number;
+  newStatus: string;
+  title: string;
+  message: string;
+  notificationType: NotificationType;
+}>;
+
 function isMissingTableError(error: unknown): boolean {
   if (!error || typeof error !== "object" || !("code" in error)) {
     return false;
@@ -334,6 +352,27 @@ function hasDuplicateEntryError(error: unknown): boolean {
   }
 
   return (error as { code?: string }).code === "ER_DUP_ENTRY";
+}
+
+function queueTravelOrderNotification(payload: TravelOrderNotificationPayload): void {
+  void (async () => {
+    try {
+      await createAndPush({
+        userId: payload.userId,
+        travelOrderId: payload.travelOrderId,
+        title: payload.title,
+        message: payload.message,
+        type: payload.notificationType,
+      });
+    } catch (error) {
+      console.error("queueTravelOrderNotification failed", error);
+    }
+
+    pushTravelOrderStatusChanged(payload.userId, {
+      travelOrderId: payload.travelOrderId,
+      newStatus: payload.newStatus,
+    });
+  })();
 }
 
 function mapTravelOrderRow(row: TravelOrderListRow): RecentTravelOrderItem {
@@ -420,6 +459,11 @@ function normalizeOptionalText(value: string, maxLength = 1000): string {
     return "";
   }
   return normalized.slice(0, maxLength);
+}
+
+function firstLine(value: string, maxLength = 255): string {
+  const [line] = value.split(/\r?\n/, 1);
+  return normalizeOptionalText(line ?? value, maxLength);
 }
 
 function parseIsoDate(value: string): string | null {
@@ -1278,6 +1322,23 @@ export async function createRegularTravelOrder(
           ],
         );
 
+        if (
+          statusId === PENDING_STATUS_ID &&
+          Number.isInteger(normalizedInput.recommendingApproverId)
+        ) {
+          queueTravelOrderNotification({
+            userId: Number(normalizedInput.recommendingApproverId),
+            travelOrderId: insertResult.insertId,
+            newStatus: "PENDING",
+            title: `${orderNo} submitted for your review`,
+            message: `${profile.fullName} submitted a travel order to ${firstLine(
+              normalizedInput.specificDestination,
+              120,
+            )}.`,
+            notificationType: "APPROVAL",
+          });
+        }
+
         return {
           ok: true,
           travelOrderId: insertResult.insertId,
@@ -1599,7 +1660,9 @@ export async function reviewTravelOrderStep1(
         SELECT
           travel_order_id,
           travel_order_no,
-          travel_status_id
+          travel_status_id,
+          requester_user_id,
+          recommending_approver_id
         FROM travel_orders
         WHERE travel_order_id = ?
           AND recommending_approver_id = ?
@@ -1661,6 +1724,24 @@ export async function reviewTravelOrderStep1(
     }
 
     await connection.commit();
+
+    if (input.action === "REJECTED") {
+      queueTravelOrderNotification({
+        userId: ownedRow.requester_user_id,
+        travelOrderId: input.travelOrderId,
+        newStatus: "REJECTED",
+        title: `${ownedRow.travel_order_no} was rejected`,
+        message: normalizedRemarks
+          ? `Your travel order was rejected at step 1. Reason: ${normalizedRemarks}`
+          : "Your travel order was rejected at step 1.",
+        notificationType: "REJECTION",
+      });
+    } else {
+      pushTravelOrderStatusChanged(ownedRow.requester_user_id, {
+        travelOrderId: input.travelOrderId,
+        newStatus: "STEP1_APPROVED",
+      });
+    }
 
     return {
       ok: true,
@@ -1869,7 +1950,9 @@ export async function reviewTravelOrderStep2(
         SELECT
           travel_order_id,
           travel_order_no,
-          travel_status_id
+          travel_status_id,
+          requester_user_id,
+          recommending_approver_id
         FROM travel_orders
         WHERE travel_order_id = ?
           AND travel_status_id = ?
@@ -1923,6 +2006,42 @@ export async function reviewTravelOrderStep2(
     }
 
     await connection.commit();
+
+    const notificationTypeByAction: Record<AdminStep2Action, NotificationType> = {
+      APPROVED: "INFO",
+      REJECTED: "REJECTION",
+      RETURNED: "RETURN",
+    };
+
+    const statusLabelByAction: Record<AdminStep2Action, string> = {
+      APPROVED: "APPROVED",
+      REJECTED: "REJECTED",
+      RETURNED: "RETURNED",
+    };
+
+    const messageByAction: Record<AdminStep2Action, string> = {
+      APPROVED: "Your travel order was approved.",
+      REJECTED: normalizedRemarks
+        ? `Your travel order was rejected. Reason: ${normalizedRemarks}`
+        : "Your travel order was rejected.",
+      RETURNED: normalizedRemarks
+        ? `Your travel order was returned for revision. Reason: ${normalizedRemarks}`
+        : "Your travel order was returned for revision.",
+    };
+
+    queueTravelOrderNotification({
+      userId: ownedRow.requester_user_id,
+      travelOrderId: input.travelOrderId,
+      newStatus: statusLabelByAction[input.action],
+      title:
+        input.action === "APPROVED"
+          ? `${ownedRow.travel_order_no} was approved`
+          : input.action === "RETURNED"
+            ? `${ownedRow.travel_order_no} was returned`
+            : `${ownedRow.travel_order_no} was rejected`,
+      message: messageByAction[input.action],
+      notificationType: notificationTypeByAction[input.action],
+    });
 
     return {
       ok: true,

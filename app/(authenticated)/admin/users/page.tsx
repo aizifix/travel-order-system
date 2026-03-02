@@ -6,7 +6,7 @@ import {
   getUserWithDivision,
   type UserFilter,
 } from "@/src/server/auth/service";
-import { AdminShell, NotificationBellButton } from "@/src/components/admin/admin-shell";
+import { AdminShell } from "@/src/components/admin/admin-shell";
 import { UsersTable, type UserTableRow } from "@/src/components/admin/users/users-table";
 import { UsersFilters } from "@/src/components/admin/users/users-filters";
 import type { UserRole } from "@/src/server/auth/types";
@@ -102,7 +102,6 @@ export default async function AdminUsersPage({
     <AdminShell
       title="Users"
       activeItem="users"
-      headerAction={<NotificationBellButton count={3} />}
       user={
         userData
           ? {

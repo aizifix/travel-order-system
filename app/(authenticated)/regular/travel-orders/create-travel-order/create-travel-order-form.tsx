@@ -92,6 +92,7 @@ export default function CreateTravelOrderForm({
     return localStorage.getItem(STORAGE_KEY) !== null;
   });
   const formRef = useRef<HTMLFormElement>(null);
+  const formId = "create-travel-order-form";
 
   const { showModal, handleNavigation, handleDiscard, handleCancel } =
     useUnsavedChanges(isDirty || restoredDraftPresent, () => {
@@ -155,27 +156,6 @@ export default function CreateTravelOrderForm({
     });
   };
 
-  const handleSubmit = async (formData: FormData) => {
-    await onSubmit(formData);
-    localStorage.removeItem(STORAGE_KEY);
-    setRestoredDraftPresent(false);
-    setIsDirty(false);
-  };
-
-  const handleSaveDraft = async () => {
-    if (!formRef.current) return;
-    const formData = new FormData(formRef.current);
-    formData.set("actionType", "draft");
-    await handleSubmit(formData);
-  };
-
-  const handleSubmitForApproval = async () => {
-    if (!formRef.current) return;
-    const formData = new FormData(formRef.current);
-    formData.set("actionType", "submit");
-    await handleSubmit(formData);
-  };
-
   return (
     <div className="space-y-4">
       {/* Unsaved Changes Modal */}
@@ -195,8 +175,10 @@ export default function CreateTravelOrderForm({
             </p>
             <div className="mt-6 flex flex-col gap-3">
               <button
-                type="button"
-                onClick={handleSaveDraft}
+                type="submit"
+                form={formId}
+                name="actionType"
+                value="draft"
                 className="inline-flex items-center justify-center rounded-lg bg-[#3B9F41] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#359436]"
               >
                 Save as draft
@@ -246,7 +228,13 @@ export default function CreateTravelOrderForm({
           </div>
         )}
 
-        <form ref={formRef} className="mt-6 space-y-5" onChange={handleFormChange}>
+        <form
+          id={formId}
+          ref={formRef}
+          action={onSubmit}
+          className="mt-6 space-y-5"
+          onChange={handleFormChange}
+        >
           <section className="rounded-xl border border-[#dfe1ed] bg-[#fafbfe] p-4">
             <h3 className="text-sm font-semibold uppercase tracking-[0.08em] text-[#5d6780]">
               Requester Details
@@ -391,16 +379,18 @@ export default function CreateTravelOrderForm({
 
           <div className="flex flex-wrap items-center gap-3 pt-1">
             <button
-              type="button"
-              onClick={handleSaveDraft}
+              type="submit"
+              name="actionType"
+              value="draft"
               disabled={!canSubmit}
               className="inline-flex h-10 items-center justify-center rounded-lg border border-[#dfe1ed] bg-white px-4 text-sm font-semibold text-[#5d6780] transition hover:bg-[#f3f5fa] disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
             >
               Save as Draft
             </button>
             <button
-              type="button"
-              onClick={handleSubmitForApproval}
+              type="submit"
+              name="actionType"
+              value="submit"
               disabled={!canSubmit}
               className="inline-flex h-10 items-center justify-center rounded-lg bg-[#3B9F41] px-4 text-sm font-semibold text-white transition hover:bg-[#359436] disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
             >

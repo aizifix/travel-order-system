@@ -1,10 +1,8 @@
 import { requireRole } from "@/src/server/auth/guards";
 import { getUserWithDivision } from "@/src/server/auth/service";
-import { NotificationBellButton } from "@/src/components/admin/notification-bell-button";
 import { ApproverShell } from "@/src/components/approver/approver-shell";
 import { ApproverTravelOrdersView } from "@/src/components/approver/travel-orders/approver-travel-orders-view";
 import {
-  getApproverPendingNotifications,
   getTravelOrdersForApprover,
 } from "@/src/server/travel-orders/service";
 import { reviewTravelOrderStep1Action } from "./actions";
@@ -75,29 +73,15 @@ export default async function ApproverTravelOrdersPage({
     firstQueryValue(resolvedSearchParams.travelOrderId),
   );
 
-  const [userData, rows, notifications] = await Promise.all([
+  const [userData, rows] = await Promise.all([
     getUserWithDivision(session.userId),
     getTravelOrdersForApprover(session.userId, 40),
-    getApproverPendingNotifications(session.userId, 8),
   ]);
 
   return (
     <ApproverShell
       title="Travel Orders"
       activeItem="travel-orders"
-      headerAction={
-        <NotificationBellButton
-          count={notifications.length}
-          items={notifications.map((item) => ({
-            id: `pending-${item.id}`,
-            title: `${item.orderNo} needs your step-1 review`,
-            description: `${item.requestedBy} - ${item.destination}`,
-            timestampLabel: `Posted ${item.orderDateLabel}`,
-            href: `/approver/travel-orders?travelOrderId=${item.id}`,
-          }))}
-          emptyMessage="No pending step-1 requests."
-        />
-      }
       user={
         userData
           ? {

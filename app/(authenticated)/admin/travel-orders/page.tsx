@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import { requireRole } from "@/src/server/auth/guards";
 import { getUserWithDivision } from "@/src/server/auth/service";
 import { getAllTravelOrdersForAdmin } from "@/src/server/travel-orders/service";
-import { AdminShell, NotificationBellButton } from "@/src/components/admin/admin-shell";
+import { AdminShell } from "@/src/components/admin/admin-shell";
 import { AdminTravelOrdersView } from "@/src/components/admin/travel-orders/travel-orders-view";
 import { TableSkeleton } from "@/src/components/ui/skeleton";
 import { reviewTravelOrderStep2Action } from "./actions";
@@ -113,7 +113,6 @@ export default async function AdminTravelOrdersPage({
     <AdminShell
       title=""
       activeItem="travel-orders"
-      headerAction={<NotificationBellButton count={3} />}
       user={
         userData
           ? {

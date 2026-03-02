@@ -147,7 +147,7 @@ export function RoleShell({
 
         <div className="min-w-0 flex-1 flex flex-col">
           <header className="px-4 pt-5 sm:px-8 lg:px-10 lg:pt-7">
-            <div className="mx-auto flex w-full max-w-[980px] items-center justify-between gap-4">
+            <div className="mx-auto flex w-full items-center justify-between gap-4">
               <h1 className="text-2xl font-semibold tracking-tight text-[#30343a] sm:text-[2rem]">
                 {title}
               </h1>
@@ -156,7 +156,7 @@ export function RoleShell({
           </header>
 
           <main className="flex-1 overflow-auto px-4 pb-8 pt-4 sm:px-8 lg:px-10 lg:pb-10 lg:pt-5">
-            <div className="mx-auto w-full max-w-[980px]">{children}</div>
+            <div className="mx-auto w-full">{children}</div>
           </main>
         </div>
       </div>
