@@ -6,7 +6,7 @@ import {
   type RoleShellUser,
 } from "@/src/components/layouts/role-shell";
 
-type ApproverNavItemKey = "dashboard" | "travel-orders" | "settings";
+type ApproverNavItemKey = "dashboard" | "travel-orders" | "ptr-summary" | "settings";
 
 type ApproverShellProps = Readonly<{
   title: string;
@@ -29,6 +29,12 @@ const OVERVIEW_ITEMS: readonly RoleShellNavItem[] = [
     href: "/approver/travel-orders",
     icon: "travel-orders",
   },
+  {
+    key: "ptr-summary",
+    label: "PTR Summary",
+    href: "/approver/ptr-summary",
+    icon: "ptr-summary",
+  },
 ];
 
 const TOOL_ITEMS: readonly RoleShellNavItem[] = [
@@ -47,7 +53,12 @@ export function ApproverShell({
       title={title}
       activeItem={activeItem}
       user={user}
-      headerAction={headerAction ?? <LiveNotificationBell role="approver" />}
+      headerAction={
+        <div className="flex items-center gap-3">
+          <LiveNotificationBell role="approver" />
+          {headerAction}
+        </div>
+      }
       overviewItems={OVERVIEW_ITEMS}
       toolItems={TOOL_ITEMS}
     >

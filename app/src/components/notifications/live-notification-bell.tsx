@@ -63,15 +63,6 @@ export function LiveNotificationBell({ role }: LiveNotificationBellProps) {
     [notifications, role],
   );
 
-  const handleOpenChange = useCallback(
-    (isOpen: boolean) => {
-      if (isOpen && unreadCount > 0) {
-        void markAllRead();
-      }
-    },
-    [markAllRead, unreadCount],
-  );
-
   const handleItemClick = useCallback(
     (itemId: string) => {
       const parsedId = Number.parseInt(itemId, 10);
@@ -87,8 +78,8 @@ export function LiveNotificationBell({ role }: LiveNotificationBellProps) {
     <NotificationBellButton
       count={unreadCount}
       items={items}
-      onOpenChange={handleOpenChange}
       onItemClick={handleItemClick}
+      onMarkAllRead={markAllRead}
       emptyMessage="No notifications yet."
     />
   );

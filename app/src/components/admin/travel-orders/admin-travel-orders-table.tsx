@@ -2,9 +2,10 @@
 
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
 import {
-  X,
   Filter,
   ChevronUp,
   ChevronDown,
@@ -18,25 +19,29 @@ import {
 } from "lucide-react";
 import type {
   AdminTravelOrderItem,
-  RequesterTravelOrderStep,
-  TravelOrderApprovalAction,
+  TravelOrderPagination,
+  TravelOrderSortColumn,
+  TravelOrderSortDirection,
 } from "@/src/server/travel-orders/service";
-import { ApprovalWorkflowTimeline } from "@/src/components/travel-orders/approval-workflow-timeline";
-import { OrderNumberCopy } from "@/src/components/travel-orders/order-number-copy";
-import { RequesterAvatar } from "@/src/components/travel-orders/requester-avatar";
+import { useRealtimeTravelOrderRefresh } from "@/src/hooks/useRealtimeTravelOrderRefresh";
+import { useDrawerFocusManagement } from "@/src/hooks/useDrawerFocusManagement";
+import { useVirtualRows } from "@/src/hooks/useVirtualRows";
+
+type CurrentFilter = Readonly<{
+  search?: string;
+  status?: string;
+  sortBy?: TravelOrderSortColumn;
+  sortDir?: TravelOrderSortDirection;
+  page?: number;
+  limit?: number;
+}>;
 
 type AdminTravelOrdersTableProps = Readonly<{
   rows: readonly AdminTravelOrderItem[];
+  pagination?: TravelOrderPagination;
+  currentFilter?: CurrentFilter;
   onReview: (formData: FormData) => Promise<void>;
   initialOrderId?: number;
-}>;
-
-type StepTone = "success" | "pending" | "danger" | "muted";
-
-type StepVisualState = Readonly<{
-  label: string;
-  tone: StepTone;
-  summary: string;
 }>;
 
 type SortDirection = "asc" | "desc" | null;
@@ -53,6 +58,8 @@ type SortColumn =
 const DRAWER_CLOSE_DELAY_MS = 300;
 const DEFAULT_PAGE_SIZE = 10;
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+const VIRTUAL_SCROLL_THRESHOLD = 50;
+const VIRTUAL_ROW_HEIGHT = 56;
 const STATUS_FILTER_OPTIONS = [
   { value: "all", label: "All Statuses" },
   { value: "PENDING", label: "Pending" },
@@ -63,6 +70,17 @@ const STATUS_FILTER_OPTIONS = [
   { value: "CANCELLED", label: "Cancelled" },
   { value: "DRAFT", label: "Draft" },
 ] as const;
+
+const AdminTravelOrderDrawer = dynamic(
+  () =>
+    import("@/src/components/admin/travel-orders/admin-travel-order-drawer").then(
+      (mod) => ({ default: mod.AdminTravelOrderDrawer }),
+    ),
+  {
+    ssr: false,
+    loading: () => <DrawerPanelFallback />,
+  },
+);
 
 function useTableSort() {
   const [sortColumn, setSortColumn] = useState<SortColumn>(null);
@@ -169,22 +187,30 @@ function useTablePagination(totalItems: number, pageSize: number = DEFAULT_PAGE_
 }
 
 function useDrawer(rows: readonly AdminTravelOrderItem[], initialOrderId?: number) {
-  const [selectedOrder, setSelectedOrder] = useState<AdminTravelOrderItem | null>(() => {
-    if (!initialOrderId) return null;
-    return rows.find((row) => row.id === initialOrderId) ?? null;
+  const [selectedOrderId, setSelectedOrderId] = useState<number | null>(() => {
+    if (!initialOrderId) {
+      return null;
+    }
+    return rows.some((row) => row.id === initialOrderId) ? initialOrderId : null;
   });
-  const [isDrawerOpen, setIsDrawerOpen] = useState(
-    () => initialOrderId !== undefined && rows.some((row) => row.id === initialOrderId),
-  );
+  const [isDrawerOpenState, setIsDrawerOpen] = useState(() => selectedOrderId !== null);
+
+  const selectedOrder = useMemo(() => {
+    if (selectedOrderId === null) {
+      return null;
+    }
+    return rows.find((row) => row.id === selectedOrderId) ?? null;
+  }, [rows, selectedOrderId]);
+  const isDrawerOpen = isDrawerOpenState && selectedOrder !== null;
 
   const handleOpenDrawer = useCallback((order: AdminTravelOrderItem) => {
-    setSelectedOrder(order);
+    setSelectedOrderId(order.id);
     requestAnimationFrame(() => setIsDrawerOpen(true));
   }, []);
 
   const handleCloseDrawer = useCallback(() => {
     setIsDrawerOpen(false);
-    setTimeout(() => setSelectedOrder(null), DRAWER_CLOSE_DELAY_MS);
+    setTimeout(() => setSelectedOrderId(null), DRAWER_CLOSE_DELAY_MS);
   }, []);
 
   useEffect(() => {
@@ -215,110 +241,140 @@ function useDrawer(rows: readonly AdminTravelOrderItem[], initialOrderId?: numbe
 
 export function AdminTravelOrdersTable({
   rows,
+  pagination,
+  currentFilter,
   onReview,
   initialOrderId,
 }: AdminTravelOrdersTableProps) {
+  useRealtimeTravelOrderRefresh();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const filterRef = useRef<HTMLDivElement>(null);
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   const canUseDom = typeof window !== "undefined";
-  const { sortColumn, sortDirection, handleSort, getSortIcon } = useTableSort();
-  const {
-    statusFilter,
-    setStatusFilter,
-    showFilterDropdown,
-    setShowFilterDropdown,
-    searchQuery,
-    setSearchQuery,
-    clearFilter,
-    hasActiveFilter,
-  } = useTableFilter();
+
+  const statusFilter = currentFilter?.status ?? "all";
+  const searchQuery = currentFilter?.search ?? "";
+  const sortColumn = currentFilter?.sortBy ?? null;
+  const sortDirection = currentFilter?.sortDir ?? null;
+
+  const [showFilterDropdown, setShowFilterDropdown] = useState(false);
+  const hasActiveFilter = statusFilter !== "all" || searchQuery !== "";
+
+  const handleSort = useCallback((column: SortColumn) => {
+    if (!column) return;
+    const params = new URLSearchParams(searchParams.toString());
+    const newSortDir = sortColumn !== column || sortDirection !== "desc" ? "desc" : "asc";
+    params.set("sortBy", column);
+    params.set("sortDir", newSortDir);
+    params.set("page", "1");
+    router.push(`/admin/travel-orders?${params.toString()}`);
+  }, [searchParams, router, sortColumn, sortDirection]);
+
+  const getSortIcon = useCallback((column: SortColumn): ReactNode => {
+    if (sortColumn !== column) return <ChevronsUpDown className="h-3.5 w-3.5 opacity-40" />;
+    if (sortDirection === "asc") return <ChevronUp className="h-3.5 w-3.5" />;
+    if (sortDirection === "desc") return <ChevronDown className="h-3.5 w-3.5" />;
+    return <ChevronsUpDown className="h-3.5 w-3.5 opacity-40" />;
+  }, [sortColumn, sortDirection]);
+
+  const handleSearchChange = useCallback((value: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (value.trim()) {
+      params.set("search", value.trim());
+    } else {
+      params.delete("search");
+    }
+    params.set("page", "1");
+    router.push(`/admin/travel-orders?${params.toString()}`);
+  }, [searchParams, router]);
+
+  const handleStatusFilterChange = useCallback((value: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (value !== "all") {
+      params.set("status", value);
+    } else {
+      params.delete("status");
+    }
+    params.set("page", "1");
+    router.push(`/admin/travel-orders?${params.toString()}`);
+  }, [searchParams, router]);
+
+  const clearFilter = useCallback(() => {
+    const params = new URLSearchParams();
+    params.set("page", "1");
+    router.push(`/admin/travel-orders?${params.toString()}`);
+  }, [router]);
+
+  const handlePageChange = useCallback((newPage: number) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("page", String(newPage));
+    router.push(`/admin/travel-orders?${params.toString()}`);
+  }, [searchParams, router]);
+
+  const handleLimitChange = useCallback((newLimit: number) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("limit", String(newLimit));
+    params.set("page", "1");
+    router.push(`/admin/travel-orders?${params.toString()}`);
+  }, [searchParams, router]);
+
   const { selectedOrder, isDrawerOpen, handleOpenDrawer, handleCloseDrawer } = useDrawer(
     rows,
     initialOrderId,
   );
+  const openDrawerFromTrigger = useCallback(
+    (order: AdminTravelOrderItem, triggerElement?: HTMLElement | null) => {
+      if (triggerElement) {
+        returnFocusRef.current = triggerElement;
+      } else if (document.activeElement instanceof HTMLElement) {
+        returnFocusRef.current = document.activeElement;
+      }
+      handleOpenDrawer(order);
+    },
+    [handleOpenDrawer],
+  );
+  const handleRowKeyDown = useCallback(
+    (
+      event: React.KeyboardEvent<HTMLTableRowElement>,
+      row: AdminTravelOrderItem,
+    ) => {
+      if (event.target !== event.currentTarget) {
+        return;
+      }
 
-  const prioritizedRows = useMemo(() => {
-    return rows
-      .map((row, index) => ({ row, index }))
-      .sort((a, b) => {
-        const priorityDiff = getStatusPriority(a.row.status) - getStatusPriority(b.row.status);
-        if (priorityDiff !== 0) {
-          return priorityDiff;
-        }
-        return a.index - b.index;
-      })
-      .map((entry) => entry.row);
-  }, [rows]);
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openDrawerFromTrigger(row, event.currentTarget);
+      }
+    },
+    [openDrawerFromTrigger],
+  );
 
-  const filteredAndSortedRows = useMemo(() => {
-    let result = [...prioritizedRows];
+  useDrawerFocusManagement({
+    isOpen: isDrawerOpen,
+    drawerRef,
+    returnFocusRef,
+  });
 
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase().trim();
-      result = result.filter(
-        (row) =>
-          row.orderNo.toLowerCase().includes(query) ||
-          row.requestedBy.toLowerCase().includes(query) ||
-          row.destination.toLowerCase().includes(query) ||
-          row.purpose.toLowerCase().includes(query) ||
-          (row.division ?? "").toLowerCase().includes(query),
-      );
-    }
-
-    if (statusFilter !== "all") {
-      result = result.filter((row) => row.status.toUpperCase() === statusFilter.toUpperCase());
-    }
-
-    if (sortColumn && sortDirection) {
-      result.sort((a, b) => {
-        let aVal: string | number = "";
-        let bVal: string | number = "";
-
-        switch (sortColumn) {
-          case "orderNo":
-            aVal = a.orderNo;
-            bVal = b.orderNo;
-            break;
-          case "orderDate":
-            aVal = new Date(a.orderDateIso || 0).getTime();
-            bVal = new Date(b.orderDateIso || 0).getTime();
-            break;
-          case "requestedBy":
-            aVal = a.requestedBy;
-            bVal = b.requestedBy;
-            break;
-          case "destination":
-            aVal = a.destination;
-            bVal = b.destination;
-            break;
-          case "purpose":
-            aVal = a.purpose;
-            bVal = b.purpose;
-            break;
-          case "departureDate":
-            aVal = new Date(a.departureDateIso || 0).getTime();
-            bVal = new Date(b.departureDateIso || 0).getTime();
-            break;
-          case "status":
-            aVal = getStatusPriority(a.status);
-            bVal = getStatusPriority(b.status);
-            break;
-        }
-
-        const comparison = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
-        return sortDirection === "asc" ? comparison : -comparison;
-      });
-    }
-
-    return result;
-  }, [prioritizedRows, searchQuery, statusFilter, sortColumn, sortDirection]);
-
-  const pagination = useTablePagination(filteredAndSortedRows.length, DEFAULT_PAGE_SIZE);
-
-  const paginatedRows = useMemo(() => {
-    const start = (pagination.currentPage - 1) * pagination.pageSize;
-    const end = start + pagination.pageSize;
-    return filteredAndSortedRows.slice(start, end);
-  }, [filteredAndSortedRows, pagination.currentPage, pagination.pageSize]);
+  const displayedRows = useMemo(() => rows, [rows]);
+  const shouldVirtualizeRows = displayedRows.length > VIRTUAL_SCROLL_THRESHOLD;
+  const {
+    containerRef: tableScrollRef,
+    handleScroll: handleTableScroll,
+    startIndex,
+    endIndex,
+    topSpacerHeight,
+    bottomSpacerHeight,
+  } = useVirtualRows({
+    rowCount: displayedRows.length,
+    estimateRowHeight: VIRTUAL_ROW_HEIGHT,
+    enabled: shouldVirtualizeRows,
+  });
+  const visibleRows = shouldVirtualizeRows
+    ? displayedRows.slice(startIndex, endIndex)
+    : displayedRows;
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -340,8 +396,8 @@ export function AdminTravelOrdersTable({
             <input
               type="text"
               placeholder="Search TO no., requester, destination, purpose..."
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
+              defaultValue={searchQuery}
+              onChange={(event) => handleSearchChange(event.target.value)}
               className="h-9 w-80 rounded-md border border-[#dfe1ed] bg-white pl-9 pr-3 text-sm text-[#2f3339] outline-none focus:border-[#3B9F41] focus:ring-1 focus:ring-[#3B9F41]"
             />
           </div>
@@ -350,7 +406,7 @@ export function AdminTravelOrdersTable({
             <button
               type="button"
               onClick={() => setShowFilterDropdown(!showFilterDropdown)}
-              className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-semibold transition ${
+              className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-semibold transition ${
                 showFilterDropdown || hasActiveFilter
                   ? "border-[#3B9F41] bg-[#f1fbf5] text-[#3B9F41]"
                   : "border-[#dfe1ed] bg-white text-[#5d6780] hover:bg-[#f3f5fa]"
@@ -367,10 +423,10 @@ export function AdminTravelOrdersTable({
                     key={option.value}
                     type="button"
                     onClick={() => {
-                      setStatusFilter(option.value);
+                      handleStatusFilterChange(option.value);
                       setShowFilterDropdown(false);
                     }}
-                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs transition ${
+                    className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs transition ${
                       statusFilter === option.value
                         ? "bg-[#f1fbf5] font-semibold text-[#3B9F41]"
                         : "text-[#4a5266] hover:bg-[#f3f5fa]"
@@ -392,7 +448,7 @@ export function AdminTravelOrdersTable({
             <button
               type="button"
               onClick={clearFilter}
-              className="text-xs text-[#5d6780] underline hover:text-[#3B9F41]"
+              className="cursor-pointer text-xs text-[#5d6780] underline hover:text-[#3B9F41]"
             >
               Clear all
             </button>
@@ -400,7 +456,11 @@ export function AdminTravelOrdersTable({
         </div>
       </div>
 
-      <div className="overflow-x-auto w-full">
+      <div
+        ref={tableScrollRef}
+        onScroll={handleTableScroll}
+        className="overflow-x-auto overflow-y-auto w-full max-h-[calc(100vh-320px)]"
+      >
         <table className="w-full min-w-[1160px] border-collapse text-left">
           <thead className="sticky top-0 z-10 bg-[#f3f5fa] text-[#5d6780]">
             <tr className="border-b border-[#cfd4e2]">
@@ -450,23 +510,48 @@ export function AdminTravelOrdersTable({
             </tr>
           </thead>
           <tbody className="text-sm text-[#4a5266]">
-            {paginatedRows.length > 0 ? (
-              paginatedRows.map((row) => (
+            {displayedRows.length > 0 ? (
+              <>
+                {shouldVirtualizeRows && topSpacerHeight > 0 ? (
+                  <tr aria-hidden="true">
+                    <td colSpan={8} style={{ height: `${topSpacerHeight}px`, padding: 0, border: 0 }} />
+                  </tr>
+                ) : null}
+                {visibleRows.map((row) => (
                 <tr
                   key={row.id}
-                  className="cursor-pointer border-b border-[#dfe1ed] transition-colors hover:bg-[#f8f9fc] last:border-b-0"
-                  onClick={() => handleOpenDrawer(row)}
+                  className="cursor-pointer border-b border-[#dfe1ed] transition-colors hover:bg-[#f8f9fc] focus:outline-none focus-visible:bg-[#f8f9fc] last:border-b-0"
+                  onClick={(event) => openDrawerFromTrigger(row, event.currentTarget)}
+                  onKeyDown={(event) => handleRowKeyDown(event, row)}
+                  tabIndex={0}
+                  aria-label={`Open details for travel order ${row.orderNo}`}
                 >
                   <BodyCell className="font-semibold">
                     <div className="flex items-center gap-2">
                       <span>{row.orderNo}</span>
                       <button
                         type="button"
-                        onClick={(event) => {
+                        onClick={async (event) => {
                           event.stopPropagation();
-                          void navigator.clipboard.writeText(row.orderNo);
+                          try {
+                            if (navigator.clipboard?.writeText) {
+                              await navigator.clipboard.writeText(row.orderNo);
+                            } else {
+                              // Fallback for non-secure contexts
+                              const textarea = document.createElement('textarea');
+                              textarea.value = row.orderNo;
+                              textarea.style.position = 'fixed';
+                              textarea.style.left = '-9999px';
+                              document.body.appendChild(textarea);
+                              textarea.select();
+                              document.execCommand('copy');
+                              document.body.removeChild(textarea);
+                            }
+                          } catch {
+                            // Silently fail - clipboard is not critical functionality
+                          }
                         }}
-                        className="inline-flex items-center justify-center rounded p-0.5 text-[#7b8398] transition hover:bg-[#f3f5fa] hover:text-[#3B9F41]"
+                        className="inline-flex cursor-pointer items-center justify-center rounded p-0.5 text-[#7b8398] transition hover:bg-[#f3f5fa] hover:text-[#3B9F41]"
                         title="Copy TO number"
                       >
                         <Copy className="h-3.5 w-3.5" />
@@ -475,13 +560,17 @@ export function AdminTravelOrdersTable({
                   </BodyCell>
                   <BodyCell>{row.orderDateLabel}</BodyCell>
                   <BodyCell>{row.requestedBy}</BodyCell>
-                  <BodyCell>{row.destination}</BodyCell>
                   <BodyCell>
-                    <span className="block max-w-[200px] truncate" title={row.purpose}>
-                      {row.purpose}
+                    <span className="block max-w-[180px] truncate" title={row.destination}>
+                      {row.destination}
                     </span>
                   </BodyCell>
                   <BodyCell>
+                    <span className="block max-w-[160px] truncate" title={row.purpose}>
+                      {row.purpose}
+                    </span>
+                  </BodyCell>
+                  <BodyCell className="whitespace-nowrap">
                     {row.departureDateLabel} - {row.returnDateLabel}
                   </BodyCell>
                   <BodyCell>
@@ -492,7 +581,7 @@ export function AdminTravelOrdersTable({
                       type="button"
                       onClick={(event) => {
                         event.stopPropagation();
-                        handleOpenDrawer(row);
+                        openDrawerFromTrigger(row, event.currentTarget);
                       }}
                       className="inline-flex cursor-pointer items-center rounded-md border border-[#dfe1ed] px-2.5 py-1.5 text-xs font-semibold text-[#5d6780] transition hover:bg-[#f3f5fa]"
                     >
@@ -500,7 +589,13 @@ export function AdminTravelOrdersTable({
                     </button>
                   </BodyCell>
                 </tr>
-              ))
+                ))}
+                {shouldVirtualizeRows && bottomSpacerHeight > 0 ? (
+                  <tr aria-hidden="true">
+                    <td colSpan={8} style={{ height: `${bottomSpacerHeight}px`, padding: 0, border: 0 }} />
+                  </tr>
+                ) : null}
+              </>
             ) : (
               <tr>
                 <td colSpan={8} className="px-5 py-10 text-center text-sm text-[#7d8598]">
@@ -514,20 +609,20 @@ export function AdminTravelOrdersTable({
         </table>
       </div>
 
-      {filteredAndSortedRows.length > 0 ? (
+      {pagination && pagination.total > 0 ? (
         <div className="flex items-center justify-between border-t border-[#dfe1ed] px-4 py-3">
           <p className="text-xs text-[#7b8398]">
             Showing{" "}
             <span className="font-semibold text-[#2f3339]">
-              {pagination.showingFrom}-{pagination.showingTo}
+              {(pagination.page - 1) * pagination.limit + 1}-
+              {Math.min(pagination.page * pagination.limit, pagination.total)}
             </span>{" "}
-            of{" "}
-            <span className="font-semibold text-[#2f3339]">{filteredAndSortedRows.length}</span>
+            of <span className="font-semibold text-[#2f3339]">{pagination.total}</span>
           </p>
           <div className="flex items-center gap-4">
             <select
-              value={pagination.pageSize}
-              onChange={(event) => pagination.changePageSize(Number(event.target.value))}
+              value={pagination.limit}
+              onChange={(e) => handleLimitChange(Number(e.target.value))}
               className="rounded-md border border-[#dfe1ed] bg-white px-2 py-1.5 text-xs font-medium text-[#5d6780] outline-none focus:border-[#3B9F41]"
             >
               {PAGE_SIZE_OPTIONS.map((size) => (
@@ -539,40 +634,40 @@ export function AdminTravelOrdersTable({
             <div className="flex items-center gap-1">
               <button
                 type="button"
-                onClick={pagination.firstPage}
-                disabled={!pagination.canGoPrev}
-                className="inline-flex items-center justify-center rounded-md border border-[#dfe1ed] p-1.5 text-[#5d6780] transition hover:bg-[#f3f5fa] disabled:cursor-not-allowed disabled:opacity-40"
+                onClick={() => handlePageChange(1)}
+                disabled={pagination.page <= 1}
+                className="inline-flex cursor-pointer items-center justify-center rounded-md border border-[#dfe1ed] p-1.5 text-[#5d6780] transition hover:bg-[#f3f5fa] disabled:cursor-not-allowed disabled:opacity-40"
                 aria-label="First page"
               >
                 <ChevronsLeft className="h-4 w-4" />
               </button>
               <button
                 type="button"
-                onClick={pagination.prevPage}
-                disabled={!pagination.canGoPrev}
-                className="inline-flex items-center justify-center rounded-md border border-[#dfe1ed] p-1.5 text-[#5d6780] transition hover:bg-[#f3f5fa] disabled:cursor-not-allowed disabled:opacity-40"
+                onClick={() => handlePageChange(pagination.page - 1)}
+                disabled={pagination.page <= 1}
+                className="inline-flex cursor-pointer items-center justify-center rounded-md border border-[#dfe1ed] p-1.5 text-[#5d6780] transition hover:bg-[#f3f5fa] disabled:cursor-not-allowed disabled:opacity-40"
                 aria-label="Previous page"
               >
                 <ChevronLeft className="h-4 w-4" />
               </button>
               <span className="min-w-[80px] text-center text-xs text-[#5d6780]">
-                Page <span className="font-semibold text-[#2f3339]">{pagination.currentPage}</span> of{" "}
+                Page <span className="font-semibold text-[#2f3339]">{pagination.page}</span> of{" "}
                 <span className="font-semibold text-[#2f3339]">{pagination.totalPages}</span>
               </span>
               <button
                 type="button"
-                onClick={pagination.nextPage}
-                disabled={!pagination.canGoNext}
-                className="inline-flex items-center justify-center rounded-md border border-[#dfe1ed] p-1.5 text-[#5d6780] transition hover:bg-[#f3f5fa] disabled:cursor-not-allowed disabled:opacity-40"
+                onClick={() => handlePageChange(pagination.page + 1)}
+                disabled={pagination.page >= pagination.totalPages}
+                className="inline-flex cursor-pointer items-center justify-center rounded-md border border-[#dfe1ed] p-1.5 text-[#5d6780] transition hover:bg-[#f3f5fa] disabled:cursor-not-allowed disabled:opacity-40"
                 aria-label="Next page"
               >
                 <ChevronRight className="h-4 w-4" />
               </button>
               <button
                 type="button"
-                onClick={pagination.lastPage}
-                disabled={!pagination.canGoNext}
-                className="inline-flex items-center justify-center rounded-md border border-[#dfe1ed] p-1.5 text-[#5d6780] transition hover:bg-[#f3f5fa] disabled:cursor-not-allowed disabled:opacity-40"
+                onClick={() => handlePageChange(pagination.totalPages)}
+                disabled={pagination.page >= pagination.totalPages}
+                className="inline-flex cursor-pointer items-center justify-center rounded-md border border-[#dfe1ed] p-1.5 text-[#5d6780] transition hover:bg-[#f3f5fa] disabled:cursor-not-allowed disabled:opacity-40"
                 aria-label="Last page"
               >
                 <ChevronsRight className="h-4 w-4" />
@@ -594,14 +689,16 @@ export function AdminTravelOrdersTable({
           {canUseDom
             ? createPortal(
                 <div
+                  ref={drawerRef}
                   className={`fixed right-0 top-0 bottom-0 z-50 w-full max-w-[760px] transform bg-white shadow-[-4px_0_24px_rgba(0,0,0,0.15)] transition-transform duration-300 ease-in-out ${
                     isDrawerOpen ? "translate-x-0" : "translate-x-full"
                   }`}
                   role="dialog"
                   aria-modal="true"
                   aria-label="Travel order details"
+                  tabIndex={-1}
                 >
-                  <TravelOrderDrawer
+                  <AdminTravelOrderDrawer
                     order={selectedOrder}
                     onReview={onReview}
                     onClose={handleCloseDrawer}
@@ -612,264 +709,6 @@ export function AdminTravelOrdersTable({
             : null}
         </>
       ) : null}
-    </div>
-  );
-}
-
-function TravelOrderDrawer({
-  order,
-  onReview,
-  onClose,
-}: Readonly<{
-  order: AdminTravelOrderItem;
-  onReview: (formData: FormData) => Promise<void>;
-  onClose: () => void;
-}>) {
-  const normalizedStatus = order.status.toUpperCase();
-  const readyForFinalReview = normalizedStatus === "STEP1_APPROVED";
-  const isPrintable = normalizedStatus === "APPROVED";
-  const printHref = `/api/travel-orders/${order.id}/print`;
-  const editHref = `/admin/travel-orders/${order.id}/edit`;
-  const approveFormId = `admin-step2-approve-${order.id}`;
-  const returnFormId = `admin-step2-return-${order.id}`;
-  const rejectFormId = `admin-step2-reject-${order.id}`;
-  const step1State = getStepVisualState(order, order.step1);
-  const step2State = getStepVisualState(order, order.step2);
-
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex-none border-b border-[#dfe1ed] px-6 py-4">
-        <div className="flex items-start justify-between">
-          <div className="flex items-start gap-3.5">
-            <RequesterAvatar fullName={order.requestedBy} />
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-lg font-semibold text-[#1a1d1f]">Travel Order Details</h2>
-                <StatusPill status={order.status} />
-              </div>
-              <p className="mt-0.5 text-sm font-medium text-[#5d6780]">{order.requestedBy}</p>
-              <OrderNumberCopy orderNo={order.orderNo} />
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full text-[#5d6780] transition hover:bg-[#f3f5fa] hover:text-[#1a1d1f]"
-            aria-label="Close drawer"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-      </div>
-
-      <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex-1 overflow-y-auto px-6 py-5 pb-24">
-          <section className="rounded-xl border border-[#dfe1ed] bg-white p-4">
-            <h3 className="text-sm font-semibold uppercase tracking-[0.08em] text-[#5d6780]">
-              Approval Progress
-            </h3>
-            <p className="mt-1 text-xs text-[#7d8598]">
-              {readyForFinalReview
-                ? "Step 1 is complete. Final admin action is required."
-                : normalizedStatus === "APPROVED"
-                  ? "Final review completed. This travel order is approved."
-                  : normalizedStatus === "REJECTED"
-                    ? "Final review completed with rejection."
-                    : normalizedStatus === "RETURNED"
-                      ? "Final review completed and returned to requester."
-                      : "Waiting for step 1 approver to complete review."}
-            </p>
-            <div className="mt-4 rounded-lg border border-[#dfe1ed] bg-[#fafbfe] p-4">
-              <ApprovalWorkflowTimeline order={order} />
-            </div>
-          </section>
-
-          <section className="mt-4 rounded-xl border border-[#dfe1ed] bg-[#fafbfe] p-4">
-            <div className="grid gap-3 text-sm text-[#4a5266] sm:grid-cols-2">
-              <SummaryRow label="Date Posted" value={order.orderDateLabel} />
-              <SummaryRow label="Requested By" value={order.requestedBy} />
-              <SummaryRow label="Division" value={order.division ?? "-"} />
-              <SummaryRow
-                label="Travel Dates"
-                value={`${order.departureDateLabel} - ${order.returnDateLabel}`}
-              />
-              <SummaryRow label="Destination" value={order.destination} />
-              <SummaryRow label="Funding Source" value={order.fundingSource || "-"} />
-            </div>
-            <div className="mt-3 rounded-lg border border-[#dfe1ed] bg-white px-3 py-2 text-sm text-[#4a5266]">
-              <p className="font-semibold text-[#2f3339]">Purpose</p>
-              <p className="mt-1 whitespace-pre-wrap break-words">{order.purpose || "-"}</p>
-            </div>
-          </section>
-
-          <section className="mt-4 rounded-xl border border-[#dfe1ed] bg-white p-4">
-            <h3 className="text-sm font-semibold uppercase tracking-[0.08em] text-[#5d6780]">
-              Additional Details
-            </h3>
-            <div className="mt-3 grid gap-3 text-sm text-[#4a5266] sm:grid-cols-2">
-              <SummaryRow label="Travel Days" value={String(order.travelDays)} />
-              <SummaryRow
-                label="Includes Other Staff"
-                value={order.hasOtherStaff ? "Yes" : "No"}
-              />
-              <SummaryRow
-                label="Travel Status Remarks"
-                value={order.travelStatusRemarks || "-"}
-              />
-            </div>
-            <div className="mt-3 rounded-lg border border-[#dfe1ed] bg-[#fafbfe] px-3 py-2 text-sm text-[#4a5266]">
-              <p className="font-semibold text-[#2f3339]">Remarks / Special Instructions</p>
-              <p className="mt-1 whitespace-pre-wrap">{order.remarks || "-"}</p>
-            </div>
-          </section>
-
-          <section className="mt-4 rounded-xl border border-[#dfe1ed] bg-white p-4">
-            <h3 className="text-sm font-semibold uppercase tracking-[0.08em] text-[#5d6780]">
-              Approval Details
-            </h3>
-            <div className="mt-4 space-y-3">
-              <ApprovalStepCard
-                stepLabel="Step 1 - First Approver"
-                expectedApproverName={order.step1.expectedApproverName}
-                step={order.step1}
-                visual={step1State}
-              />
-              <ApprovalStepCard
-                stepLabel="Step 2 - RED/Admin"
-                expectedApproverName={order.step2.expectedApproverName}
-                step={order.step2}
-                visual={step2State}
-              />
-            </div>
-          </section>
-
-          <section className="mt-4 rounded-xl border border-[#dfe1ed] bg-white p-4">
-            <h3 className="text-sm font-semibold uppercase tracking-[0.08em] text-[#5d6780]">
-              Step 2 Review Actions
-            </h3>
-            {readyForFinalReview ? (
-              <div className="mt-3 space-y-3">
-                <form
-                  id={approveFormId}
-                  action={onReview}
-                  className="rounded-lg border border-[#dfe1ed] p-3"
-                >
-                  <input type="hidden" name="travelOrderId" value={order.id} />
-                  <input type="hidden" name="action" value="APPROVED" />
-                  <FieldWrapper label="Approval Notes (Optional)">
-                    <textarea
-                      name="remarks"
-                      rows={2}
-                      className="w-full resize-none rounded-lg border border-[#dfe1ed] bg-white px-3 py-2 text-sm text-[#2f3339] outline-none focus:border-[#3B9F41] focus:ring-1 focus:ring-[#3B9F41]"
-                      placeholder="Optional context for final approval"
-                    />
-                  </FieldWrapper>
-                </form>
-
-                <form
-                  id={returnFormId}
-                  action={onReview}
-                  className="rounded-lg border border-[#ffe2a8] bg-[#fff9ed] p-3"
-                >
-                  <input type="hidden" name="travelOrderId" value={order.id} />
-                  <input type="hidden" name="action" value="RETURNED" />
-                  <FieldWrapper label="Return Reason">
-                    <textarea
-                      name="remarks"
-                      rows={3}
-                      required
-                      className="w-full resize-none rounded-lg border border-[#ffd591] bg-white px-3 py-2 text-sm text-[#2f3339] outline-none focus:border-[#d8a347] focus:ring-1 focus:ring-[#d8a347]"
-                      placeholder="State what needs to be revised before resubmission"
-                    />
-                  </FieldWrapper>
-                </form>
-
-                <form
-                  id={rejectFormId}
-                  action={onReview}
-                  className="rounded-lg border border-[#ffcece] bg-[#fff7f7] p-3"
-                >
-                  <input type="hidden" name="travelOrderId" value={order.id} />
-                  <input type="hidden" name="action" value="REJECTED" />
-                  <FieldWrapper label="Rejection Reason">
-                    <textarea
-                      name="remarks"
-                      rows={3}
-                      required
-                      className="w-full resize-none rounded-lg border border-[#ffcece] bg-white px-3 py-2 text-sm text-[#2f3339] outline-none focus:border-[#e35e5e] focus:ring-1 focus:ring-[#e35e5e]"
-                      placeholder="State the reason for rejection"
-                    />
-                  </FieldWrapper>
-                </form>
-              </div>
-            ) : (
-              <p className="mt-3 rounded-lg border border-[#dfe1ed] bg-[#f8f9fc] px-3 py-2 text-sm text-[#5d6780]">
-                {normalizedStatus === "PENDING"
-                  ? "Step 1 approver must approve this request first."
-                  : "Final review is already complete for this travel order."}
-              </p>
-            )}
-          </section>
-        </div>
-
-        <div className="flex-none border-t border-[#dfe1ed] bg-white/95 px-6 py-4 backdrop-blur supports-[backdrop-filter]:bg-white/85">
-          <div className="grid gap-2 sm:grid-cols-2">
-            {isPrintable ? (
-              <a
-                href={printHref}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex h-10 w-full cursor-pointer items-center justify-center rounded-lg border border-[#3B9F41] bg-[#3B9F41] px-4 text-sm font-semibold text-white transition hover:bg-[#359436]"
-              >
-                Print Travel Order
-              </a>
-            ) : (
-              <button
-                type="button"
-                disabled
-                className="inline-flex h-10 w-full cursor-not-allowed items-center justify-center rounded-lg border border-[#dfe1ed] bg-[#f8f9fc] px-4 text-sm font-semibold text-[#9aa3b8]"
-              >
-                Print Travel Order
-              </button>
-            )}
-
-            <a
-              href={editHref}
-              className="inline-flex h-10 w-full cursor-pointer items-center justify-center rounded-lg border border-[#dfe1ed] bg-white px-4 text-sm font-semibold text-[#5d6780] transition hover:bg-[#f3f5fa]"
-            >
-              Edit Travel Order
-            </a>
-          </div>
-
-          {readyForFinalReview ? (
-            <div className="mt-2 grid gap-2 sm:grid-cols-3">
-              <button
-                type="submit"
-                form={approveFormId}
-                className="inline-flex h-10 w-full items-center justify-center rounded-lg bg-[#3B9F41] px-4 text-sm font-semibold text-white transition hover:bg-[#359436]"
-              >
-                Approve
-              </button>
-
-              <button
-                type="submit"
-                form={returnFormId}
-                className="inline-flex h-10 w-full items-center justify-center rounded-lg bg-[#d8a347] px-4 text-sm font-semibold text-white transition hover:bg-[#be8f3d]"
-              >
-                Return
-              </button>
-
-              <button
-                type="submit"
-                form={rejectFormId}
-                className="inline-flex h-10 w-full items-center justify-center rounded-lg bg-[#E35E5E] px-4 text-sm font-semibold text-white transition hover:bg-[#ca4e4e]"
-              >
-                Reject
-              </button>
-            </div>
-          ) : null}
-        </div>
-      </div>
     </div>
   );
 }
@@ -890,7 +729,7 @@ function SortableHeaderCell({
       <button
         type="button"
         onClick={onSort}
-        className={`inline-flex items-center gap-1.5 transition ${
+        className={`inline-flex cursor-pointer items-center gap-1.5 transition ${
           isActive ? "text-[#3B9F41]" : "text-[#5d6780] hover:text-[#2f3339]"
         }`}
       >
@@ -912,161 +751,21 @@ function BodyCell({
   return <td className={`px-5 py-3.5 align-middle ${className ?? ""}`}>{children}</td>;
 }
 
-function SummaryRow({
-  label,
-  value,
-}: Readonly<{
-  label: string;
-  value: string;
-}>) {
+function DrawerPanelFallback() {
   return (
-    <p>
-      <span className="font-semibold text-[#2f3339]">{label}:</span> {value}
-    </p>
-  );
-}
-
-function ApprovalStepCard({
-  stepLabel,
-  expectedApproverName,
-  step,
-  visual,
-}: Readonly<{
-  stepLabel: string;
-  expectedApproverName: string | null;
-  step: RequesterTravelOrderStep;
-  visual: StepVisualState;
-}>) {
-  return (
-    <article className={`rounded-lg border p-3 ${getStepToneClasses(visual.tone)}`}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h4 className="text-sm font-semibold">{stepLabel}</h4>
-        <span className="rounded-full bg-white/70 px-2 py-0.5 text-xs font-semibold">
-          {visual.label}
-        </span>
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex-none border-b border-[#dfe1ed] px-6 py-4">
+        <div className="h-6 w-52 animate-pulse rounded bg-[#e5e7eb]" />
       </div>
-      <p className="mt-1 text-xs">{visual.summary}</p>
-      {expectedApproverName ? <p className="mt-1 text-xs">Expected approver: {expectedApproverName}</p> : null}
-      {step.actionAtLabel ? <p className="mt-1 text-xs">Updated: {step.actionAtLabel}</p> : null}
-      {step.remarks ? <p className="mt-1 text-xs">Remarks: {step.remarks}</p> : null}
-    </article>
+      <div className="flex-1 px-6 py-5">
+        <div className="space-y-3">
+          <div className="h-4 w-full animate-pulse rounded bg-[#e5e7eb]" />
+          <div className="h-4 w-[88%] animate-pulse rounded bg-[#e5e7eb]" />
+          <div className="h-4 w-[72%] animate-pulse rounded bg-[#e5e7eb]" />
+        </div>
+      </div>
+    </div>
   );
-}
-
-function FieldWrapper({
-  label,
-  children,
-}: Readonly<{
-  label: string;
-  children: ReactNode;
-}>) {
-  return (
-    <label className="block">
-      <span className="mb-1.5 block text-sm font-medium text-[#4a5266]">{label}</span>
-      {children}
-    </label>
-  );
-}
-
-function getStatusPriority(status: string): number {
-  const normalized = status.toUpperCase();
-  if (normalized === "STEP1_APPROVED") return 0;
-  if (normalized === "PENDING") return 1;
-  if (normalized === "APPROVED") return 2;
-  if (normalized === "RETURNED") return 3;
-  if (normalized === "REJECTED" || normalized === "CANCELLED") return 4;
-  return 5;
-}
-
-function getStepVisualState(
-  order: AdminTravelOrderItem,
-  step: RequesterTravelOrderStep,
-): StepVisualState {
-  if (step.action) {
-    return {
-      label: formatActionLabel(step.action),
-      tone: getActionTone(step.action),
-      summary: step.actedByName
-        ? `${formatActionLabel(step.action)} by ${step.actedByName}`
-        : formatActionLabel(step.action),
-    };
-  }
-
-  const normalizedStatus = order.status.toUpperCase();
-
-  if (step.stepNo === 1) {
-    if (normalizedStatus === "PENDING") {
-      return {
-        label: "Pending",
-        tone: "pending",
-        summary: "Awaiting first approver review.",
-      };
-    }
-    if (normalizedStatus === "STEP1_APPROVED" || normalizedStatus === "APPROVED") {
-      return {
-        label: "Approved",
-        tone: "success",
-        summary: "Step 1 completed and forwarded.",
-      };
-    }
-    if (normalizedStatus === "REJECTED") {
-      return {
-        label: "Rejected",
-        tone: "danger",
-        summary: "Request was rejected.",
-      };
-    }
-    if (normalizedStatus === "RETURNED") {
-      return {
-        label: "Returned",
-        tone: "pending",
-        summary: "Request was returned for requester updates.",
-      };
-    }
-  }
-
-  if (step.stepNo === 2) {
-    if (normalizedStatus === "PENDING") {
-      return { label: "Waiting", tone: "muted", summary: "Waiting for step 1 approval." };
-    }
-    if (normalizedStatus === "STEP1_APPROVED") {
-      return { label: "Pending", tone: "pending", summary: "Ready for final review." };
-    }
-    if (normalizedStatus === "APPROVED") {
-      return { label: "Approved", tone: "success", summary: "Final approval completed." };
-    }
-    if (normalizedStatus === "REJECTED") {
-      return { label: "Rejected", tone: "danger", summary: "Final review rejected." };
-    }
-    if (normalizedStatus === "RETURNED") {
-      return { label: "Returned", tone: "pending", summary: "Returned at final review." };
-    }
-  }
-
-  return {
-    label: "Not Started",
-    tone: "muted",
-    summary: "No final-step action recorded yet.",
-  };
-}
-
-function getActionTone(action: TravelOrderApprovalAction): StepTone {
-  if (action === "APPROVED") return "success";
-  if (action === "RETURNED") return "pending";
-  return "danger";
-}
-
-function formatActionLabel(action: TravelOrderApprovalAction): string {
-  if (action === "RETURNED") return "Returned";
-  if (action === "REJECTED") return "Rejected";
-  return "Approved";
-}
-
-function getStepToneClasses(tone: StepTone): string {
-  if (tone === "success") return "border-[#cdeedb] bg-[#f1fbf5] text-[#1f7d42]";
-  if (tone === "danger") return "border-[#ffcece] bg-[#fff3f3] text-[#a33a3a]";
-  if (tone === "pending") return "border-[#ffe4b5] bg-[#fff9ed] text-[#8a5b00]";
-  return "border-[#dfe1ed] bg-[#f8f9fc] text-[#5d6780]";
 }
 
 function StatusPill({ status }: Readonly<{ status: string }>) {

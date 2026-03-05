@@ -51,7 +51,7 @@ export function RecentTravelOrdersTable({
                 <BodyCell>
                   <button
                     type="button"
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[#3c414b] transition hover:bg-black/5"
+                    className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-[#3c414b] transition hover:bg-black/5"
                     aria-label={`Open actions for ${row.toNo}`}
                   >
                     <VerticalDotsIcon />

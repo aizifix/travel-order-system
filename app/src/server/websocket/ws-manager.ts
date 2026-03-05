@@ -60,10 +60,13 @@ export class WsManager {
   sendToUser(userId: number, event: WsEvent): number {
     const sockets = this.clientsByUserId.get(userId);
     if (!sockets || sockets.size === 0) {
+      console.log(`[wsManager] No sockets found for user ${userId}, event not sent`);
       return 0;
     }
 
-    return this.sendToSockets(sockets, event);
+    const delivered = this.sendToSockets(sockets, event);
+    console.log(`[wsManager] Sent event to user ${userId}:`, event.type, `(delivered to ${delivered} sockets)`);
+    return delivered;
   }
 
   broadcast(event: WsEvent): number {

@@ -1,14 +1,16 @@
 "use client";
 
+import type { CSSProperties } from "react";
+
 interface SkeletonProps {
   className?: string;
-  style?: React.CSSProperties;
+  style?: CSSProperties;
 }
 
 export function Skeleton({ className, style }: SkeletonProps) {
   return (
     <div
-      className={`animate-pulse rounded-md bg-[#e5e7eb] ${className ?? ""}`}
+      className={`skeleton rounded-md ${className ?? ""}`}
       style={style}
     />
   );
@@ -16,6 +18,8 @@ export function Skeleton({ className, style }: SkeletonProps) {
 
 // Table Skeleton
 export function TableSkeleton({ rows = 5, columns = 7 }: { rows?: number; columns?: number }) {
+  const widthPattern = [62, 74, 58, 81, 67, 72, 64, 77];
+
   return (
     <div className="rounded-xl border border-[#dfe1ed] bg-white">
       <table className="w-full border-collapse">
@@ -35,7 +39,9 @@ export function TableSkeleton({ rows = 5, columns = 7 }: { rows?: number; column
                 <td key={colIndex} className="px-5 py-4">
                   <Skeleton
                     className="h-4"
-                    style={{ width: `${60 + Math.random() * 40}%` }}
+                    style={{
+                      width: `${widthPattern[(rowIndex + colIndex) % widthPattern.length]}%`,
+                    }}
                   />
                 </td>
               ))}

@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage } from "node:http";
+import { loadEnvConfig } from "@next/env";
 import next from "next";
 import { WebSocketServer } from "ws";
 import {
@@ -6,6 +7,8 @@ import {
   verifySessionToken,
 } from "./app/src/server/auth/session";
 import { wsManager } from "./app/src/server/websocket/ws-manager";
+
+loadEnvConfig(process.cwd());
 
 type NextAppWithUpgradeHandler = ReturnType<typeof next> & {
   getUpgradeHandler?: () => (
@@ -85,6 +88,7 @@ async function bootstrap() {
       return;
     }
 
+    socket.setNoDelay(true);
     wsServer.handleUpgrade(request, socket, head, (ws) => {
       wsManager.addClient(session.userId, ws);
     });

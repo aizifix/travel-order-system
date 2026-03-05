@@ -1,12 +1,17 @@
+import { Suspense } from "react";
 import { requireRole } from "@/src/server/auth/guards";
 import { getUserWithDivision } from "@/src/server/auth/service";
 import {
   getRequesterTravelOrderProfile,
   getTravelOrderCreationLookups,
-  getTravelOrdersForRequester,
+  getTravelOrdersForRequesterPaginated,
+  type TravelOrderPagination,
+  type TravelOrderSortColumn,
+  type TravelOrderSortDirection,
 } from "@/src/server/travel-orders/service";
 import { RegularShell } from "@/src/components/regular/regular-shell";
 import { RegularTravelOrdersView } from "@/src/components/regular/travel-orders/regular-travel-orders-view";
+import { TableSkeleton } from "@/src/components/ui/skeleton";
 import {
   cancelRegularTravelOrderAction,
   createRegularTravelOrderAction,
@@ -26,6 +31,25 @@ function firstQueryValue(value: string | string[] | undefined): string | undefin
     return value[0];
   }
   return value;
+}
+
+function parseSearchParams(searchParams: {
+  [key: string]: string | string[] | undefined;
+}) {
+  const search = firstQueryValue(searchParams.search);
+  const status = firstQueryValue(searchParams.status) ?? "all";
+  const sortBy = firstQueryValue(searchParams.sortBy) as TravelOrderSortColumn | undefined;
+  const sortDir = firstQueryValue(searchParams.sortDir) as TravelOrderSortDirection | undefined;
+  const page =
+    typeof searchParams.page === "string"
+      ? parseInt(searchParams.page, 10)
+      : 1;
+  const limit =
+    typeof searchParams.limit === "string"
+      ? parseInt(searchParams.limit, 10)
+      : 10;
+
+  return { search, status, sortBy, sortDir, page, limit };
 }
 
 function getFeedback(searchParams: {
@@ -65,15 +89,39 @@ function getFeedback(searchParams: {
     };
   }
 
-  const cancelledOrderNo = firstQueryValue(searchParams.cancelled);
-  if (cancelledOrderNo) {
-    return {
-      type: "success",
-      text: `Travel order ${cancelledOrderNo} was cancelled.`,
-    };
-  }
-
   return undefined;
+}
+
+async function TravelOrdersContent({
+  userId,
+  feedback,
+  filter,
+}: {
+  userId: number;
+  feedback: ReturnType<typeof getFeedback>;
+  filter: ReturnType<typeof parseSearchParams>;
+}) {
+  const [profile, result] = await Promise.all([
+    getRequesterTravelOrderProfile(userId),
+    getTravelOrdersForRequesterPaginated(userId, filter),
+  ]);
+
+  const lookups = await getTravelOrderCreationLookups(profile?.divisionId ?? null);
+
+  const pagination: TravelOrderPagination = result.pagination;
+
+  return (
+    <RegularTravelOrdersView
+      profile={profile}
+      lookups={lookups}
+      rows={result.items}
+      pagination={pagination}
+      currentFilter={filter}
+      onUpdate={updateRegularTravelOrderAction}
+      onCancel={cancelRegularTravelOrderAction}
+      feedback={feedback}
+    />
+  );
 }
 
 export default async function RegularTravelOrdersPage({
@@ -82,13 +130,9 @@ export default async function RegularTravelOrdersPage({
   const session = await requireRole("regular");
   const resolvedSearchParams = await searchParams;
   const feedback = getFeedback(resolvedSearchParams);
+  const filter = parseSearchParams(resolvedSearchParams);
 
-  const [userData, profile, rows] = await Promise.all([
-    getUserWithDivision(session.userId),
-    getRequesterTravelOrderProfile(session.userId),
-    getTravelOrdersForRequester(session.userId, 30),
-  ]);
-  const lookups = await getTravelOrderCreationLookups(profile?.divisionId ?? null);
+  const userData = await getUserWithDivision(session.userId);
 
   return (
     <RegularShell
@@ -104,14 +148,19 @@ export default async function RegularTravelOrdersPage({
           : undefined
       }
     >
-      <RegularTravelOrdersView
-        profile={profile}
-        lookups={lookups}
-        rows={rows}
-        onUpdate={updateRegularTravelOrderAction}
-        onCancel={cancelRegularTravelOrderAction}
-        feedback={feedback}
-      />
+      <Suspense
+        fallback={
+          <div className="rounded-2xl border border-[#dfe1ed] bg-white p-5 sm:p-6">
+            <TableSkeleton rows={6} columns={8} />
+          </div>
+        }
+      >
+        <TravelOrdersContent
+          userId={session.userId}
+          feedback={feedback}
+          filter={filter}
+        />
+      </Suspense>
     </RegularShell>
   );
 }

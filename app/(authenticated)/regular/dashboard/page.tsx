@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import { requireRole } from "@/src/server/auth/guards";
 import { getUserWithDivision } from "@/src/server/auth/service";
@@ -7,34 +8,18 @@ import {
 } from "@/src/server/travel-orders/service";
 import { RegularShell } from "@/src/components/regular/regular-shell";
 import {
-  RegularDashboardView,
+  RegularDashboardMetrics,
+  RegularDashboardTable,
   type RegularDashboardMetric,
+  type RegularRecentTravelOrder,
 } from "@/src/components/regular/dashboard/regular-dashboard-view";
+import { MetricCardsSkeleton, Skeleton, TableSkeleton } from "@/src/components/ui/skeleton";
 
 export const dynamic = "force-dynamic";
 
-export default async function RegularDashboardPage() {
-  const session = await requireRole("regular");
-
-  const [userData, stats, recentOrders] = await Promise.all([
-    getUserWithDivision(session.userId),
-    getRegularDashboardStats(session.userId),
-    getTravelOrdersForRequester(session.userId, 6),
-  ]);
-
-  const now = new Date();
-  const dateTimeStr =
-    now.toLocaleDateString("en-US", {
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    }) +
-    " | " +
-    now.toLocaleTimeString("en-US", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+// Async component for metrics with its own Suspense
+async function MetricsContent({ userId }: { userId: number }) {
+  const stats = await getRegularDashboardStats(userId);
 
   const metrics: readonly RegularDashboardMetric[] = [
     {
@@ -59,13 +44,36 @@ export default async function RegularDashboardPage() {
     },
   ];
 
+  return <RegularDashboardMetrics metrics={metrics} />;
+}
+
+// Async component for table with its own Suspense
+async function TableContent({ userId }: { userId: number }) {
+  const recentOrders = await getTravelOrdersForRequester(userId, 6);
+
+  const formattedOrders: readonly RegularRecentTravelOrder[] = recentOrders.map((order) => ({
+    id: order.id,
+    orderNo: order.orderNo,
+    destination: order.destination,
+    departureDateLabel: order.departureDateLabel,
+    returnDateLabel: order.returnDateLabel,
+    status: order.status,
+  }));
+
+  return <RegularDashboardTable recentOrders={formattedOrders} />;
+}
+
+export default async function RegularDashboardPage() {
+  const session = await requireRole("regular");
+  const userData = await getUserWithDivision(session.userId);
+
   return (
     <RegularShell
       title="Dashboard"
       activeItem="dashboard"
       headerAction={
         <Link
-          href="/regular/travel-orders"
+          href="/regular/travel-orders/create-travel-order"
           className="inline-flex items-center rounded-lg bg-[#3B9F41] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#359436]"
         >
           + Create Travel Order
@@ -81,19 +89,49 @@ export default async function RegularDashboardPage() {
           : undefined
       }
     >
-      <RegularDashboardView
-        fullName={`${userData?.firstName ?? ""} ${userData?.lastName ?? ""}`.trim()}
-        currentDateTime={dateTimeStr}
-        metrics={metrics}
-        recentOrders={recentOrders.map((order) => ({
-          id: order.id,
-          orderNo: order.orderNo,
-          destination: order.destination,
-          departureDateLabel: order.departureDateLabel,
-          returnDateLabel: order.returnDateLabel,
-          status: order.status,
-        }))}
-      />
+      {/* Welcome section - immediate render with user data */}
+      <section className="rounded-2xl bg-gradient-to-r from-[#3B9F41] to-[#F0F0F0] p-6 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.15)] sm:p-7">
+        <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+          Welcome Back, {userData?.firstName ?? "User"}!
+        </h2>
+        <p className="mt-2 text-sm text-white/90">
+          {new Date().toLocaleDateString("en-US", {
+            weekday: "long",
+            year: "numeric",
+            month: "long",
+            day: "numeric",
+          })}
+          {" | "}
+          {new Date().toLocaleTimeString("en-US", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </p>
+      </section>
+
+      {/* Metrics section with independent Suspense */}
+      <section className="mt-8 lg:mt-10">
+        <Suspense fallback={<MetricCardsSkeleton count={4} />}>
+          <MetricsContent userId={session.userId} />
+        </Suspense>
+      </section>
+
+      {/* Table section with independent Suspense */}
+      <section className="mt-8 lg:mt-10">
+        <Suspense
+          fallback={
+            <div>
+              <div className="mb-4">
+                <Skeleton className="h-6 w-48" />
+                <Skeleton className="mt-1 h-3 w-64" />
+              </div>
+              <TableSkeleton rows={6} columns={4} />
+            </div>
+          }
+        >
+          <TableContent userId={session.userId} />
+        </Suspense>
+      </section>
     </RegularShell>
   );
 }

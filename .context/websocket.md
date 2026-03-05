@@ -1,196 +1,125 @@
-# WebSocket Real-Time Notifications
+﻿# WebSocket Realtime Architecture
 
-> **Last updated:** 2026-03-02
-
----
+> Last updated: 2026-03-02
 
 ## Overview
 
-A WebSocket layer on top of the existing Travel Order System that delivers **instant, in-app notifications** when travel orders are created, approved, rejected, or returned — without polling.
+The Travel Order System now uses one websocket connection per authenticated session to deliver:
 
----
+- realtime notifications
+- realtime travel-order table updates
+- realtime multi-step drawer timeline/status updates
 
-## Architecture
+No polling is required for the core travel-order status flow.
 
-```
-Browser (React)                          Server (Node.js)
-─────────────────                        ────────────────
-useWebSocket hook  ◄──── ws(s)://host ───►  custom server.ts
-        │                                       │
-        ▼                                       ▼
-useNotifications   ◄── JSON events ──►   WsManager singleton
-        │                                       │
-        ▼                                       ▼
-NotificationBell                         Notification Service
-                                                │
-                                                ▼
-                                         MySQL (notifications table)
-```
+## Server Architecture
 
-### Custom HTTP Server (`server.ts`)
+### Custom HTTP + WS Server (`server.ts`)
 
-Next.js does not natively support persistent WebSocket connections from API routes. A lightweight **custom `server.ts`** wraps Next.js's request handler and adds a `ws` upgrade listener on the same port.
+- Runs Next.js with a custom `http.Server`
+- Handles websocket upgrade at `/ws`
+- Verifies `to_session` cookie with `verifySessionToken`
+- Registers connection with `WsManager.addClient(userId, ws)`
 
-- Creates `http.Server`, passes HTTP requests to `next().getRequestHandler()`
-- On the `upgrade` event, parses the `to_session` cookie, verifies with `verifySessionToken`
-- Delegates accepted sockets to `WsManager.addClient(userId, ws)`
+### WebSocket Manager (`app/src/server/websocket/ws-manager.ts`)
 
-### WebSocket Manager (`src/server/websocket/ws-manager.ts`)
+- Tracks active sockets by `userId`
+- Supports multiple browser tabs per user
+- Sends typed events to user-targeted socket groups
+- Uses heartbeat ping/pong every 30s for stale cleanup
 
-Singleton class managing all active connections:
+## Event Contract
 
-- `Map<number, Set<WebSocket>>` — maps user ID → connections (supports multiple tabs)
-- `addClient(userId, ws)` — registers socket, sets up `close`/`error` cleanup
-- `sendToUser(userId, event)` — serialises a typed event and sends to all sockets for that user
-- `broadcast(event)` — sends to every connected client
-- Heartbeat (`ping`/`pong`) every 30 s to detect stale connections
+### Event Types (`app/src/server/websocket/ws-events.ts`)
 
----
+- `notification:new`
+- `notification:count`
+- `travel-order:status-changed`
 
-## WebSocket Events (`src/server/websocket/ws-events.ts`)
-
-| Event                          | Direction     | Payload                                      |
-|--------------------------------|---------------|----------------------------------------------|
-| `notification:new`             | Server → Client | `{ notification }` — full notification object |
-| `notification:count`           | Server → Client | `{ unreadCount: number }`                    |
-| `travel-order:status-changed`  | Server → Client | `{ travelOrderId, newStatus }`               |
-
-All events follow the shape:
+Event envelope:
 
 ```ts
 type WsEvent = {
   type: string;
   payload: Record<string, unknown>;
-  timestamp: string; // ISO 8601
+  timestamp: string; // ISO-8601
 };
 ```
 
----
+`travel-order:status-changed` payload:
 
-## Notification Server Layer
-
-### Model (`app/src/server/notifications/model.ts`)
-
-SQL queries against the existing `notifications` table:
-
-- `getByUserId(userId, { limit, offset, unreadOnly })` → rows
-- `getUnreadCount(userId)` → number
-- `create(data)` → insert, return `notification_id`
-- `markAsRead(notificationId, userId)` → update `is_read = 1`
-- `markAllAsRead(userId)` → update all
-
-### Service (`app/src/server/notifications/service.ts`)
-
-- `createAndPush(data)` — inserts DB record **and** pushes via WsManager
-- `getNotifications(userId, filters)` — thin wrapper over model
-- `markRead(notificationId, userId)` / `markAllRead(userId)` — updates + pushes count
-
-### API Routes (`app/api/notifications/route.ts`)
-
-| Method  | Endpoint              | Description                                  |
-|---------|-----------------------|----------------------------------------------|
-| `GET`   | `/api/notifications`  | List notifications for the current user      |
-| `PATCH` | `/api/notifications`  | Mark read (`{ notificationId }`) or mark all |
-
----
-
-## Travel Order Integration
-
-In `app/src/server/travel-orders/service.ts`, after each status change:
-
-| Action         | Notified User(s)     | Notification Type |
-|----------------|----------------------|-------------------|
-| TO **created** | Assigned approver(s) | `APPROVAL`        |
-| TO **approved**| TO creator           | `INFO`            |
-| TO **rejected**| TO creator           | `REJECTION`       |
-| TO **returned**| TO creator           | `RETURN`          |
-
-Each call creates a DB record *and* pushes a real-time event in one step.
-
----
-
-## Client-Side Hooks
-
-### `useWebSocket` (`app/src/hooks/useWebSocket.ts`)
-
-- Opens `ws(s)://host/ws` on mount
-- Auto-reconnects with exponential back-off (1 s → 2 s → 4 s … max 30 s)
-- Exposes `lastEvent`, `isConnected`, `sendMessage`
-- Cleans up on unmount
-
-### `useNotifications` (`app/src/hooks/useNotifications.ts`)
-
-- Fetches initial notifications from `GET /api/notifications`
-- Listens for `notification:new` / `notification:count` events via `useWebSocket`
-- Exposes `notifications`, `unreadCount`, `markAsRead`, `markAllAsRead`
-
-### `WebSocketProvider` (`app/src/components/providers/WebSocketProvider.tsx`)
-
-- Wraps the authenticated layout — single socket per session
-- Provides context consumed by `useWebSocket`
-
----
-
-## UI Integration
-
-### Notification Bell
-
-The existing `NotificationBellButton` component is wired to live data via `useNotifications`:
-
-- Real-time unread badge count
-- Live notification items in the dropdown
-- Mark-as-read support
-
-### Authenticated Layout
-
-`app/(authenticated)/layout.tsx` wraps children with `<WebSocketProvider>` so all authenticated pages share a single WebSocket connection.
-
----
-
-## Package Changes
-
-| Dependency   | Type | Purpose                       |
-|--------------|------|-------------------------------|
-| `ws`         | prod | WebSocket server              |
-| `@types/ws`  | dev  | TypeScript types for `ws`     |
-| `tsx`        | dev  | Run `server.ts` in dev mode   |
-
-### Script Changes
-
-```json
+```ts
 {
-  "dev": "tsx watch server.ts",
-  "start": "node server.js",
-  "build:server": "tsc --project tsconfig.server.json"
+  travelOrderId: number;
+  newStatus: string;
 }
 ```
 
----
+## Notification Layer
 
-## Extending with New Events
+### Service (`app/src/server/notifications/service.ts`)
 
-1. Add the new event type to `ws-events.ts`
-2. In the relevant service, call `WsManager.sendToUser()` or `WsManager.broadcast()`
-3. On the client, handle the event in the appropriate hook
+- `createAndPush()` inserts notification + pushes `notification:new` and `notification:count`
+- `markRead()` / `markAllRead()` updates DB and pushes unread count
+- `pushTravelOrderStatusChangedToUsers(userIds, payload)` fans one travel-order event out to all relevant users
 
----
+## Travel Order Realtime Fanout
 
-## File Map
+### Service (`app/src/server/travel-orders/service.ts`)
 
-```
-project-root/
-├─ server.ts                                  # Custom HTTP + WS server
-├─ src/server/websocket/
-│  ├─ ws-manager.ts                           # Connection manager singleton
-│  └─ ws-events.ts                            # Event type definitions
-├─ app/src/server/notifications/
-│  ├─ model.ts                                # DB queries
-│  └─ service.ts                              # Business logic + WS push
-├─ app/api/notifications/
-│  └─ route.ts                                # REST endpoints
-├─ app/src/hooks/
-│  ├─ useWebSocket.ts                         # WS connection hook
-│  └─ useNotifications.ts                     # Notification state hook
-└─ app/src/components/providers/
-   └─ WebSocketProvider.tsx                   # React context provider
-```
+After each create/update/cancel/review mutation, the system pushes `travel-order:status-changed` to:
+
+- requester
+- assigned step-1 approver (when available)
+- all active admin users
+
+Notifications are still role-targeted, but table/drawer sync now reaches all affected reviewers.
+
+## Client Hooks
+
+### `useWebSocketConnection` (`app/src/hooks/useWebSocket.ts`)
+
+- creates `/ws` connection
+- reconnects with exponential backoff
+- exposes `lastEvent` and `isConnected`
+
+### `useNotifications` (`app/src/hooks/useNotifications.ts`)
+
+- initializes notification snapshot from API
+- applies incoming `notification:new` and `notification:count` events
+- exposes mark-as-read actions
+
+### `useRealtimeTravelOrderRefresh` (`app/src/hooks/useRealtimeTravelOrderRefresh.ts`)
+
+- listens for `travel-order:status-changed`
+- debounces `router.refresh()` to avoid refresh storms
+- used by regular, approver, and admin travel-order tables
+
+## UI Integration
+
+### Websocket Provider
+
+`app/(authenticated)/layout.tsx` wraps all authenticated pages with `WebSocketProvider`.
+
+### Notification Bell
+
+`LiveNotificationBell` consumes `useNotifications` for realtime badge and list updates.
+
+### Travel-Order Tables + Drawer Slides
+
+- regular table: `app/src/components/regular/travel-orders/regular-travel-orders-table.tsx`
+- approver table: `app/src/components/approver/travel-orders/approver-travel-orders-table.tsx`
+- admin table: `app/src/components/admin/travel-orders/admin-travel-orders-table.tsx`
+
+Each table now:
+
+- refreshes immediately when websocket travel-order events arrive
+- keeps open drawer content synced from refreshed row data
+- updates multi-step approval timeline/status cards live
+
+## Extend Pattern
+
+1. Add event type in `ws-events.ts`.
+2. Push event from service after successful DB write.
+3. Handle event in a focused client hook.
+4. Keep UI state derived from refreshed server rows where possible.

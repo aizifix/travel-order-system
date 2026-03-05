@@ -32,10 +32,28 @@ type PrintableTravelOrderStaffRow = RowDataPacket & {
   staff_division: string | null;
 };
 
+type PrintableTravelOrderTripRow = RowDataPacket & {
+  trip_id: number;
+  trip_order: number | null;
+  specific_destination: string | null;
+  specific_purpose: string | null;
+  departure_date_iso: string | null;
+  return_date_iso: string | null;
+};
+
 export type PrintableTravelOrderStaff = Readonly<{
   name: string;
   position: string;
   division: string;
+}>;
+
+export type PrintableTravelOrderTrip = Readonly<{
+  id: number;
+  tripOrder: number;
+  departureDateIso: string;
+  returnDateIso: string;
+  specificDestination: string;
+  specificPurpose: string;
 }>;
 
 export type PrintableTravelOrderData = Readonly<{
@@ -61,6 +79,7 @@ export type PrintableTravelOrderData = Readonly<{
   finalApproverName: string;
   finalApproverPosition: string;
   otherStaff: readonly PrintableTravelOrderStaff[];
+  trips: readonly PrintableTravelOrderTrip[];
 }>;
 
 export type GetPrintableTravelOrderResult = Readonly<
@@ -257,6 +276,58 @@ export async function getPrintableTravelOrderForViewer(
       }
     }
 
+    let trips: readonly PrintableTravelOrderTrip[] = [];
+
+    try {
+      const [tripRows] = await pool.execute<PrintableTravelOrderTripRow[]>(
+        `
+          SELECT
+            trip_id,
+            trip_order,
+            specific_destination,
+            specific_purpose,
+            DATE_FORMAT(departure_date, '%Y-%m-%d') AS departure_date_iso,
+            DATE_FORMAT(return_date, '%Y-%m-%d') AS return_date_iso
+          FROM travel_order_trips
+          WHERE travel_order_id = ?
+          ORDER BY trip_order ASC, departure_date ASC, trip_id ASC
+        `,
+        [travelOrderId],
+      );
+
+      trips = tripRows.map((tripRow, index) => {
+        const fallbackTripOrder = index + 1;
+        const normalizedTripOrder =
+          Number.isFinite(tripRow.trip_order) && tripRow.trip_order !== null
+            ? Math.max(1, Math.trunc(Number(tripRow.trip_order)))
+            : fallbackTripOrder;
+        const normalizedDepartureDateIso =
+          tripRow.departure_date_iso ??
+          tripRow.return_date_iso ??
+          departureDateIso;
+        const normalizedReturnDateIso =
+          tripRow.return_date_iso ??
+          tripRow.departure_date_iso ??
+          returnDateIso;
+
+        return {
+          id: tripRow.trip_id,
+          tripOrder: normalizedTripOrder,
+          departureDateIso: normalizedDepartureDateIso,
+          returnDateIso: normalizedReturnDateIso,
+          specificDestination: normalizeText(
+            tripRow.specific_destination ?? row.destination,
+            2000,
+          ),
+          specificPurpose: normalizeText(tripRow.specific_purpose ?? row.purpose, 2000),
+        };
+      });
+    } catch (error) {
+      if (!isMissingTableError(error)) {
+        throw error;
+      }
+    }
+
     return {
       ok: true,
       data: {
@@ -287,6 +358,7 @@ export async function getPrintableTravelOrderForViewer(
           normalizeText(row.final_approver_position, 200) ||
           "Regional Executive Director",
         otherStaff,
+        trips,
       },
     };
   } catch (error) {

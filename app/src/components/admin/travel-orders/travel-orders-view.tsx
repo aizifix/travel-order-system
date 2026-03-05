@@ -1,10 +1,14 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import type { AdminTravelOrderItem } from "@/src/server/travel-orders/service";
+import type {
+  AdminTravelOrderItem,
+  TravelOrderPagination,
+  TravelOrderSortColumn,
+  TravelOrderSortDirection,
+} from "@/src/server/travel-orders/service";
 import { TableSkeleton } from "@/src/components/ui/skeleton";
 
-// Lazy load the heavy table component
 const AdminTravelOrdersTable = dynamic(
   () => import("@/src/components/admin/travel-orders/admin-travel-orders-table").then((mod) => ({ default: mod.AdminTravelOrdersTable })),
   {
@@ -16,8 +20,19 @@ const AdminTravelOrdersTable = dynamic(
   }
 );
 
+type CurrentFilter = Readonly<{
+  search?: string;
+  status?: string;
+  sortBy?: TravelOrderSortColumn;
+  sortDir?: TravelOrderSortDirection;
+  page?: number;
+  limit?: number;
+}>;
+
 type AdminTravelOrdersViewProps = Readonly<{
   rows: readonly AdminTravelOrderItem[];
+  pagination?: TravelOrderPagination;
+  currentFilter?: CurrentFilter;
   onReview: (formData: FormData) => Promise<void>;
   initialOrderId?: number;
   feedback?: Readonly<{
@@ -28,6 +43,8 @@ type AdminTravelOrdersViewProps = Readonly<{
 
 export function AdminTravelOrdersView({
   rows,
+  pagination,
+  currentFilter,
   onReview,
   initialOrderId,
   feedback,
@@ -58,6 +75,8 @@ export function AdminTravelOrdersView({
 
       <AdminTravelOrdersTable
         rows={rows}
+        pagination={pagination}
+        currentFilter={currentFilter}
         onReview={onReview}
         initialOrderId={initialOrderId}
       />

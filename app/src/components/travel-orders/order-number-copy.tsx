@@ -34,7 +34,24 @@ export function OrderNumberCopy({ orderNo, className }: OrderNumberCopyProps) {
 
   const handleCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(orderNo);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(orderNo);
+      } else {
+        // Fallback for non-secure contexts
+        const textarea = document.createElement('textarea');
+        textarea.value = orderNo;
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.select();
+        const success = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        if (!success) {
+          setCopyState("error");
+          scheduleReset();
+          return;
+        }
+      }
       setCopyState("copied");
     } catch {
       setCopyState("error");

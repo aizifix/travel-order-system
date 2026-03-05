@@ -54,7 +54,6 @@ function getInitials(name: string): string {
 }
 
 export function RoleShell({
-  title,
   activeItem,
   children,
   headerAction,
@@ -65,10 +64,10 @@ export function RoleShell({
   brandSubtitle = "DA - Region 10",
 }: RoleShellProps) {
   return (
-    <div className="min-h-screen bg-[#f4f5f8] text-[#2f3339]">
-      <div className="flex flex-col lg:flex-row">
-        <aside className="sticky top-0 z-10 h-auto w-full shrink-0 bg-[#3B9F41] text-white lg:h-screen lg:w-[250px]">
-          <div className="flex h-full flex-col px-4 py-4">
+    <div className="min-h-dvh bg-[#f4f5f8] text-[#2f3339]">
+      <div className="flex flex-col lg:h-dvh lg:flex-row lg:overflow-hidden">
+        <aside className="z-10 h-auto w-full shrink-0 bg-[#3B9F41] text-white lg:sticky lg:top-0 lg:h-dvh lg:w-[250px]">
+          <div className="flex h-full flex-col overflow-y-auto px-4 py-4">
             <div className="flex items-center gap-1 px-1">
               <Image
                 src="/da_logo.png"
@@ -117,7 +116,7 @@ export function RoleShell({
             <form action="/api/auth/logout" method="post" className="mt-2">
               <button
                 type="submit"
-                className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[13px] font-medium text-white/95 transition hover:bg-white/10"
+                className="flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-left text-[13px] font-medium text-white/95 transition hover:bg-white/10"
               >
                 <LogOut className="h-5 w-5" aria-hidden="true" />
                 <span>Log Out</span>
@@ -145,17 +144,13 @@ export function RoleShell({
           </div>
         </aside>
 
-        <div className="min-w-0 flex-1 flex flex-col">
-          <header className="px-4 pt-5 sm:px-8 lg:px-10 lg:pt-7">
-            <div className="mx-auto flex w-full items-center justify-between gap-4">
-              <h1 className="text-2xl font-semibold tracking-tight text-[#30343a] sm:text-[2rem]">
-                {title}
-              </h1>
-              {headerAction}
+        <div className="min-w-0 flex-1 flex flex-col lg:min-h-0 lg:h-dvh">
+          {headerAction ? (
+            <div className="px-4 pt-4 sm:px-8 lg:px-10 lg:pt-5">
+              <div className="flex items-center justify-end">{headerAction}</div>
             </div>
-          </header>
-
-          <main className="flex-1 overflow-auto px-4 pb-8 pt-4 sm:px-8 lg:px-10 lg:pb-10 lg:pt-5">
+          ) : null}
+          <main className="flex-1 overflow-y-auto overflow-x-hidden px-4 pb-8 pt-4 sm:px-8 lg:min-h-0 lg:px-10 lg:pb-10 lg:pt-5">
             <div className="mx-auto w-full">{children}</div>
           </main>
         </div>

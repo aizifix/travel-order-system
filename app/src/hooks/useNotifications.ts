@@ -90,6 +90,18 @@ function isNotificationCountEvent(
   return event.type === WS_EVENT_TYPES.NOTIFICATION_COUNT;
 }
 
+function isNotificationMarkReadEvent(
+  event: WsEvent,
+): event is WsEvent<"notification:mark-read"> {
+  return event.type === WS_EVENT_TYPES.NOTIFICATION_MARK_READ;
+}
+
+function isNotificationMarkAllReadEvent(
+  event: WsEvent,
+): event is WsEvent<"notification:mark-all-read"> {
+  return event.type === WS_EVENT_TYPES.NOTIFICATION_MARK_ALL_READ;
+}
+
 export type UseNotificationsResult = Readonly<{
   notifications: readonly NotificationItem[];
   unreadCount: number;
@@ -101,7 +113,7 @@ export type UseNotificationsResult = Readonly<{
 }>;
 
 export function useNotifications(): UseNotificationsResult {
-  const { lastEvent, isConnected } = useWebSocket();
+  const { isConnected, subscribe } = useWebSocket();
   const [notifications, setNotifications] = useState<readonly NotificationItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -138,20 +150,34 @@ export function useNotifications(): UseNotificationsResult {
   }, []);
 
   useEffect(() => {
-    if (!lastEvent) {
-      return;
-    }
+    return subscribe((event) => {
+      if (isNotificationNewEvent(event)) {
+        const incoming = mapWsNotification(event.payload.notification);
+        setNotifications((current) => upsertNotification(current, incoming));
+        return;
+      }
 
-    if (isNotificationNewEvent(lastEvent)) {
-      const incoming = mapWsNotification(lastEvent.payload.notification);
-      setNotifications((current) => upsertNotification(current, incoming));
-      return;
-    }
+      if (isNotificationCountEvent(event)) {
+        setUnreadCount(Math.max(0, event.payload.unreadCount));
+        return;
+      }
 
-    if (isNotificationCountEvent(lastEvent)) {
-      setUnreadCount(Math.max(0, lastEvent.payload.unreadCount));
-    }
-  }, [lastEvent]);
+      if (isNotificationMarkReadEvent(event)) {
+        setNotifications((current) =>
+          current.map((item) =>
+            item.id === event.payload.notificationId ? { ...item, isRead: true } : item,
+          ),
+        );
+        return;
+      }
+
+      if (isNotificationMarkAllReadEvent(event)) {
+        setNotifications((current) =>
+          current.map((item) => ({ ...item, isRead: true })),
+        );
+      }
+    });
+  }, [subscribe]);
 
   useEffect(() => {
     const intervalMs = isConnected

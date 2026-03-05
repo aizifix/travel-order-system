@@ -1,10 +1,15 @@
+import { Suspense } from "react";
 import { requireRole } from "@/src/server/auth/guards";
 import { getUserWithDivision } from "@/src/server/auth/service";
+import {
+  getTravelOrdersForApproverPaginated,
+  type TravelOrderPagination,
+  type TravelOrderSortColumn,
+  type TravelOrderSortDirection,
+} from "@/src/server/travel-orders/service";
 import { ApproverShell } from "@/src/components/approver/approver-shell";
 import { ApproverTravelOrdersView } from "@/src/components/approver/travel-orders/approver-travel-orders-view";
-import {
-  getTravelOrdersForApprover,
-} from "@/src/server/travel-orders/service";
+import { TableSkeleton } from "@/src/components/ui/skeleton";
 import { reviewTravelOrderStep1Action } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +25,25 @@ function firstQueryValue(value: string | string[] | undefined): string | undefin
     return value[0];
   }
   return value;
+}
+
+function parseSearchParams(searchParams: {
+  [key: string]: string | string[] | undefined;
+}) {
+  const search = firstQueryValue(searchParams.search);
+  const status = firstQueryValue(searchParams.status) ?? "all";
+  const sortBy = firstQueryValue(searchParams.sortBy) as TravelOrderSortColumn | undefined;
+  const sortDir = firstQueryValue(searchParams.sortDir) as TravelOrderSortDirection | undefined;
+  const page =
+    typeof searchParams.page === "string"
+      ? parseInt(searchParams.page, 10)
+      : 1;
+  const limit =
+    typeof searchParams.limit === "string"
+      ? parseInt(searchParams.limit, 10)
+      : 10;
+
+  return { search, status, sortBy, sortDir, page, limit };
 }
 
 function toPositiveInteger(value: string | undefined): number | undefined {
@@ -63,6 +87,31 @@ function getFeedback(searchParams: {
   return undefined;
 }
 
+async function TravelOrdersContent({
+  userId,
+  initialOrderId,
+  feedback,
+  filter,
+}: {
+  userId: number;
+  initialOrderId: number | undefined;
+  feedback: ReturnType<typeof getFeedback>;
+  filter: ReturnType<typeof parseSearchParams>;
+}) {
+  const result = await getTravelOrdersForApproverPaginated(userId, filter);
+
+  return (
+    <ApproverTravelOrdersView
+      rows={result.items}
+      pagination={result.pagination}
+      currentFilter={filter}
+      onReview={reviewTravelOrderStep1Action}
+      initialOrderId={initialOrderId}
+      feedback={feedback}
+    />
+  );
+}
+
 export default async function ApproverTravelOrdersPage({
   searchParams,
 }: ApproverTravelOrdersPageProps) {
@@ -72,11 +121,9 @@ export default async function ApproverTravelOrdersPage({
   const initialOrderId = toPositiveInteger(
     firstQueryValue(resolvedSearchParams.travelOrderId),
   );
+  const filter = parseSearchParams(resolvedSearchParams);
 
-  const [userData, rows] = await Promise.all([
-    getUserWithDivision(session.userId),
-    getTravelOrdersForApprover(session.userId, 40),
-  ]);
+  const userData = await getUserWithDivision(session.userId);
 
   return (
     <ApproverShell
@@ -92,12 +139,20 @@ export default async function ApproverTravelOrdersPage({
           : undefined
       }
     >
-      <ApproverTravelOrdersView
-        rows={rows}
-        onReview={reviewTravelOrderStep1Action}
-        initialOrderId={initialOrderId}
-        feedback={feedback}
-      />
+      <Suspense
+        fallback={
+          <div className="rounded-2xl border border-[#dfe1ed] bg-white p-5 sm:p-6">
+            <TableSkeleton rows={6} columns={8} />
+          </div>
+        }
+      >
+        <TravelOrdersContent
+          userId={session.userId}
+          initialOrderId={initialOrderId}
+          feedback={feedback}
+          filter={filter}
+        />
+      </Suspense>
     </ApproverShell>
   );
 }

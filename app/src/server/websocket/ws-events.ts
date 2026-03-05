@@ -1,6 +1,8 @@
 export const WS_EVENT_TYPES = {
   NOTIFICATION_NEW: "notification:new",
   NOTIFICATION_COUNT: "notification:count",
+  NOTIFICATION_MARK_READ: "notification:mark-read",
+  NOTIFICATION_MARK_ALL_READ: "notification:mark-all-read",
   TRAVEL_ORDER_STATUS_CHANGED: "travel-order:status-changed",
 } as const;
 
@@ -29,6 +31,10 @@ export type WsEventPayloadMap = Readonly<{
   [WS_EVENT_TYPES.NOTIFICATION_COUNT]: Readonly<{
     unreadCount: number;
   }>;
+  [WS_EVENT_TYPES.NOTIFICATION_MARK_READ]: Readonly<{
+    notificationId: number;
+  }>;
+  [WS_EVENT_TYPES.NOTIFICATION_MARK_ALL_READ]: Readonly<Record<never, never>>;
   [WS_EVENT_TYPES.TRAVEL_ORDER_STATUS_CHANGED]: Readonly<{
     travelOrderId: number;
     newStatus: string;

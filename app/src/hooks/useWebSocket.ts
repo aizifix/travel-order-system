@@ -3,13 +3,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { WsEvent } from "@/src/server/websocket/ws-events";
 
-const BASE_RECONNECT_DELAY_MS = 1_000;
-const MAX_RECONNECT_DELAY_MS = 30_000;
+const BASE_RECONNECT_DELAY_MS = 500;
+const MAX_RECONNECT_DELAY_MS = 5_000;
+
+export type WsEventListener = (event: WsEvent) => void;
 
 export type UseWebSocketConnectionResult = Readonly<{
-  lastEvent: WsEvent | null;
   isConnected: boolean;
   sendMessage: (message: unknown) => boolean;
+  subscribe: (listener: WsEventListener) => () => void;
 }>;
 
 function getWebSocketUrl(): string | null {
@@ -36,10 +38,10 @@ function isWsEvent(value: unknown): value is WsEvent {
 }
 
 export function useWebSocketConnection(): UseWebSocketConnectionResult {
-  const [lastEvent, setLastEvent] = useState<WsEvent | null>(null);
   const [isConnected, setIsConnected] = useState(false);
 
   const socketRef = useRef<WebSocket | null>(null);
+  const listenersRef = useRef(new Set<WsEventListener>());
   const connectRef = useRef<() => void>(() => undefined);
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -53,6 +55,8 @@ export function useWebSocketConnection(): UseWebSocketConnectionResult {
   }, []);
 
   useEffect(() => {
+    const listeners = listenersRef.current;
+
     const connect = () => {
       const url = getWebSocketUrl();
       if (!url) {
@@ -65,15 +69,24 @@ export function useWebSocketConnection(): UseWebSocketConnectionResult {
       socket.onopen = () => {
         reconnectAttemptRef.current = 0;
         setIsConnected(true);
+        console.log("[useWebSocket] Connected to WebSocket server");
       };
 
       socket.onmessage = (event) => {
         try {
           const parsed = JSON.parse(event.data) as unknown;
+          console.log("[useWebSocket] Received message:", parsed);
           if (!isWsEvent(parsed)) {
+            console.log("[useWebSocket] Invalid event format, ignoring");
             return;
           }
-          setLastEvent(parsed);
+          for (const listener of listeners) {
+            try {
+              listener(parsed);
+            } catch (error) {
+              console.error("WebSocket event listener failed", error);
+            }
+          }
         } catch {
           // Ignore malformed events from non-app sources.
         }
@@ -98,7 +111,7 @@ export function useWebSocketConnection(): UseWebSocketConnectionResult {
           MAX_RECONNECT_DELAY_MS,
           BASE_RECONNECT_DELAY_MS * 2 ** Math.min(attempt, 5),
         );
-        const jitter = Math.floor(Math.random() * 500);
+        const jitter = Math.floor(Math.random() * 250);
         const nextDelay = Math.min(MAX_RECONNECT_DELAY_MS, expDelay + jitter);
 
         clearReconnectTimer();
@@ -115,6 +128,7 @@ export function useWebSocketConnection(): UseWebSocketConnectionResult {
     return () => {
       shouldReconnectRef.current = false;
       clearReconnectTimer();
+      listeners.clear();
 
       const socket = socketRef.current;
       socketRef.current = null;
@@ -140,12 +154,20 @@ export function useWebSocketConnection(): UseWebSocketConnectionResult {
     }
   }, []);
 
+  const subscribe = useCallback((listener: WsEventListener): (() => void) => {
+    listenersRef.current.add(listener);
+
+    return () => {
+      listenersRef.current.delete(listener);
+    };
+  }, []);
+
   return useMemo(
     () => ({
-      lastEvent,
       isConnected,
       sendMessage,
+      subscribe,
     }),
-    [isConnected, lastEvent, sendMessage],
+    [isConnected, sendMessage, subscribe],
   );
 }

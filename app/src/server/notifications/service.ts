@@ -81,10 +81,10 @@ export async function createAndPush(
 ): Promise<NotificationItem | null> {
   try {
     const notificationId = await createNotification(input);
-    const [notification, unreadCount] = await Promise.all([
-      getById(notificationId),
-      getUnreadCount(input.userId),
-    ]);
+    const notificationPromise = getById(notificationId);
+    const unreadCountPromise = getUnreadCount(input.userId);
+
+    const notification = await notificationPromise;
 
     if (notification) {
       wsManager.sendToUser(
@@ -94,6 +94,8 @@ export async function createAndPush(
         }),
       );
     }
+
+    const unreadCount = await unreadCountPromise;
 
     wsManager.sendToUser(
       input.userId,
@@ -115,6 +117,12 @@ export async function markRead(
 ): Promise<Readonly<{ changed: boolean; unreadCount: number }>> {
   try {
     const changed = await markAsRead(notificationId, userId);
+    if (changed) {
+      wsManager.sendToUser(
+        userId,
+        createWsEvent(WS_EVENT_TYPES.NOTIFICATION_MARK_READ, { notificationId }),
+      );
+    }
     const unreadCount = await pushUnreadCount(userId);
     return { changed, unreadCount };
   } catch (error) {
@@ -130,6 +138,12 @@ export async function markAllRead(
 ): Promise<Readonly<{ changedCount: number; unreadCount: number }>> {
   try {
     const changedCount = await markAllAsRead(userId);
+    if (changedCount > 0) {
+      wsManager.sendToUser(
+        userId,
+        createWsEvent(WS_EVENT_TYPES.NOTIFICATION_MARK_ALL_READ, {}),
+      );
+    }
     const unreadCount = await pushUnreadCount(userId);
     return { changedCount, unreadCount };
   } catch (error) {
@@ -147,8 +161,26 @@ export function pushTravelOrderStatusChanged(
     newStatus: string;
   }>,
 ): void {
-  wsManager.sendToUser(
-    userId,
-    createWsEvent(WS_EVENT_TYPES.TRAVEL_ORDER_STATUS_CHANGED, payload),
-  );
+  pushTravelOrderStatusChangedToUsers([userId], payload);
+}
+
+export function pushTravelOrderStatusChangedToUsers(
+  userIds: readonly number[],
+  payload: Readonly<{
+    travelOrderId: number;
+    newStatus: string;
+  }>,
+): void {
+  const event = createWsEvent(WS_EVENT_TYPES.TRAVEL_ORDER_STATUS_CHANGED, payload);
+  const uniqueUserIds = new Set<number>();
+
+  for (const userId of userIds) {
+    if (Number.isInteger(userId) && userId > 0) {
+      uniqueUserIds.add(userId);
+    }
+  }
+
+  for (const userId of uniqueUserIds) {
+    wsManager.sendToUser(userId, event);
+  }
 }

@@ -133,7 +133,22 @@ export function AddUserModal({ lookups, onClose, onCreated }: AddUserModalProps)
     }
 
     try {
-      await navigator.clipboard.writeText(password);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(password);
+      } else {
+        // Fallback for non-secure contexts
+        const textarea = document.createElement('textarea');
+        textarea.value = password;
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.select();
+        const success = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        if (!success) {
+          throw new Error('execCommand failed');
+        }
+      }
       showToast({
         type: "success",
         title: "Password copied",
@@ -251,7 +266,7 @@ export function AddUserModal({ lookups, onClose, onCreated }: AddUserModalProps)
             <button
               type="button"
               onClick={onClose}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-full text-[#5d6780] transition hover:bg-[#f3f5fa] hover:text-[#1a1d1f]"
+              className="inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-full text-[#5d6780] transition hover:bg-[#f3f5fa] hover:text-[#1a1d1f]"
               aria-label="Close add user modal"
             >
               <X className="h-5 w-5" />
@@ -387,7 +402,7 @@ export function AddUserModal({ lookups, onClose, onCreated }: AddUserModalProps)
                       <button
                         type="button"
                         onClick={() => setIsPasswordVisible((current) => !current)}
-                        className="absolute right-1 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-[#5d6780] transition hover:bg-[#f3f5fa]"
+                        className="absolute right-1 top-1/2 inline-flex h-8 w-8 cursor-pointer -translate-y-1/2 items-center justify-center rounded-md text-[#5d6780] transition hover:bg-[#f3f5fa]"
                         aria-label={isPasswordVisible ? "Hide password" : "Show password"}
                       >
                         {isPasswordVisible ? (
@@ -400,7 +415,7 @@ export function AddUserModal({ lookups, onClose, onCreated }: AddUserModalProps)
                     <button
                       type="button"
                       onClick={handleGeneratePassword}
-                      className="inline-flex h-10 items-center gap-1 rounded-lg border border-[#dfe1ed] bg-white px-3 text-sm font-medium text-[#5d6780] transition hover:bg-[#f3f5fa]"
+                      className="inline-flex h-10 cursor-pointer items-center gap-1 rounded-lg border border-[#dfe1ed] bg-white px-3 text-sm font-medium text-[#5d6780] transition hover:bg-[#f3f5fa]"
                     >
                       <RefreshCw className="h-4 w-4" />
                       Generate
@@ -408,7 +423,7 @@ export function AddUserModal({ lookups, onClose, onCreated }: AddUserModalProps)
                     <button
                       type="button"
                       onClick={handleCopyPassword}
-                      className="inline-flex h-10 items-center gap-1 rounded-lg border border-[#dfe1ed] bg-white px-3 text-sm font-medium text-[#5d6780] transition hover:bg-[#f3f5fa]"
+                      className="inline-flex h-10 cursor-pointer items-center gap-1 rounded-lg border border-[#dfe1ed] bg-white px-3 text-sm font-medium text-[#5d6780] transition hover:bg-[#f3f5fa]"
                     >
                       <Copy className="h-4 w-4" />
                       Copy
@@ -425,14 +440,14 @@ export function AddUserModal({ lookups, onClose, onCreated }: AddUserModalProps)
               <button
                 type="button"
                 onClick={onClose}
-                className="inline-flex h-10 items-center justify-center rounded-lg border border-[#dfe1ed] bg-white px-4 text-sm font-medium text-[#5d6780] transition hover:bg-[#f3f5fa]"
+                className="inline-flex h-10 cursor-pointer items-center justify-center rounded-lg border border-[#dfe1ed] bg-white px-4 text-sm font-medium text-[#5d6780] transition hover:bg-[#f3f5fa]"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={!hasLookupData || isSubmitting}
-                className="inline-flex h-10 items-center justify-center rounded-lg bg-[#3B9F41] px-4 text-sm font-semibold text-white transition hover:bg-[#359436] disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex h-10 cursor-pointer items-center justify-center rounded-lg bg-[#3B9F41] px-4 text-sm font-semibold text-white transition hover:bg-[#359436] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isSubmitting ? "Creating..." : "Create User"}
               </button>

@@ -1,6 +1,6 @@
 # Travel Order System — Database Schema
 
-> **Last updated:** 2026-02-26  
+> **Last updated:** 2026-02-26
 > **Engine:** MySQL 8 · InnoDB · utf8mb4_unicode_ci
 
 ---
@@ -169,7 +169,7 @@ All lookup tables follow the same pattern:
 | `user_id` | INT | NO | — | **FK → users** · IDX |
 | `created_at` | TIMESTAMP | NO | `CURRENT_TIMESTAMP` | |
 
-**Unique:** (`travel_order_id`, `user_id`)  
+**Unique:** (`travel_order_id`, `user_id`)
 **On Delete:** CASCADE (both FKs)
 
 ---

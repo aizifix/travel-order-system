@@ -36,7 +36,7 @@ export function PasswordInputField({
         onClick={() => setIsVisible((visible) => !visible)}
         aria-label={isVisible ? "Hide password" : "Show password"}
         aria-pressed={isVisible}
-        className="absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-[#4E5971]/60 transition hover:text-[#2E363A] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1CB061]/25"
+        className="absolute right-2 top-1/2 inline-flex h-8 w-8 cursor-pointer -translate-y-1/2 items-center justify-center rounded-md text-[#4E5971]/60 transition hover:text-[#2E363A] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1CB061]/25"
       >
         {isVisible ? (
           <EyeOff aria-hidden="true" className="h-5 w-5" strokeWidth={1.7} />

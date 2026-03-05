@@ -6,7 +6,7 @@ import {
   type RoleShellUser,
 } from "@/src/components/layouts/role-shell";
 
-type RegularNavItemKey = "dashboard" | "travel-orders" | "settings";
+type RegularNavItemKey = "dashboard" | "travel-orders" | "ptr-summary" | "settings";
 
 type RegularShellProps = Readonly<{
   title: string;
@@ -26,8 +26,14 @@ const OVERVIEW_ITEMS: readonly RoleShellNavItem[] = [
   {
     key: "travel-orders",
     label: "Travel Orders",
-    href: "/regular/travel-orders",
+    href: "/regular/travel-orders/create-travel-order",
     icon: "travel-orders",
+  },
+  {
+    key: "ptr-summary",
+    label: "PTR Summary",
+    href: "/regular/ptr-summary",
+    icon: "ptr-summary",
   },
 ];
 
@@ -47,7 +53,12 @@ export function RegularShell({
       title={title}
       activeItem={activeItem}
       user={user}
-      headerAction={headerAction ?? <LiveNotificationBell role="regular" />}
+      headerAction={
+        <div className="flex items-center gap-3">
+          <LiveNotificationBell role="regular" />
+          {headerAction}
+        </div>
+      }
       overviewItems={OVERVIEW_ITEMS}
       toolItems={TOOL_ITEMS}
     >

@@ -3,6 +3,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { Mail } from "lucide-react";
 import { PasswordInputField } from "@/src/components/auth/password-input-field";
+import { DemoAccountSection } from "./demo-account-section";
 
 type InputFieldProps = {
   name: string;
@@ -67,9 +68,9 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const loginError = getQueryParam(params.error);
 
   return (
-    <main className="min-h-screen bg-white">
-      <div className="flex min-h-screen w-full flex-col lg:flex-row">
-        <section className="relative overflow-hidden bg-gradient-to-br from-[#0C7F4F] via-[#16A15D] to-[#1CB061] px-5 py-6 text-white sm:px-8 sm:py-8 lg:flex-[0.85] lg:px-10 lg:py-10">
+    <main className="min-h-screen bg-white lg:h-[100dvh] lg:overflow-hidden">
+      <div className="flex min-h-screen w-full flex-col lg:h-full lg:flex-row">
+        <section className="relative overflow-hidden bg-gradient-to-br from-[#0C7F4F] via-[#16A15D] to-[#1CB061] px-5 py-6 text-white sm:px-8 sm:py-8 lg:h-full lg:flex-[0.85] lg:px-10 lg:py-10">
           <Image
             src="/lg_bg.png"
             alt=""
@@ -107,9 +108,9 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           </div>
         </section>
 
-        <section className="flex flex-1 items-center justify-center bg-white px-4 py-8 sm:px-6 sm:py-10 lg:flex-[1.15] lg:px-10">
+        <section className="flex flex-1 items-center justify-center bg-white px-4 py-8 sm:px-6 sm:py-10 lg:h-full lg:flex-[1.15] lg:px-10 lg:py-6">
           <div className="w-full max-w-[487px] rounded-[5.5px]  bg-white lg:min-h-[469px]">
-            <div className="px-6 py-8 sm:px-10 sm:py-10 lg:px-[40px] lg:pb-[106px] lg:pt-[68px]">
+            <div className="px-6 py-8 sm:px-10 sm:py-10 lg:px-[40px] lg:pb-[52px] lg:pt-[42px]">
               <h2 className="text-[26px] font-semibold tracking-tight text-[#2E363A]">
                 LOGIN
               </h2>
@@ -148,11 +149,28 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
                 <button
                   type="submit"
-                  className="mt-[16px] inline-flex h-[47px] w-full items-center justify-center rounded-[9px] bg-[#3B9F41] text-sm font-semibold text-white transition-colors hover:bg-[#359436] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1CB061]/30 cursor-pointer"
+                  id="login-submit-btn"
+                  className="mt-[16px] inline-flex h-[47px] w-full items-center justify-center rounded-[9px] bg-[#3B9F41] text-sm font-semibold text-white transition-colors hover:bg-[#359436] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1CB061]/30 disabled:cursor-not-allowed disabled:opacity-70 cursor-pointer"
                 >
-                  SIGN ME IN
+                  <span className="flex items-center gap-2">
+                    SIGN ME IN
+                  </span>
                 </button>
               </form>
+
+              <DemoAccountSection />
+
+              <script
+                dangerouslySetInnerHTML={{
+                  __html: `
+                    document.getElementById('login-submit-btn').closest('form').addEventListener('submit', function(e) {
+                      var btn = document.getElementById('login-submit-btn');
+                      btn.disabled = true;
+                      btn.querySelector('span').innerHTML = '<svg class="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Signing in...';
+                    });
+                  `,
+                }}
+              />
             </div>
           </div>
         </section>

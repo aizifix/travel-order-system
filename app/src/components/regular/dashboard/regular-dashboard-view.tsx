@@ -16,8 +16,106 @@ export type RegularRecentTravelOrder = Readonly<{
   status: string;
 }>;
 
+// Separate component for metrics - can be used with its own Suspense
+export function RegularDashboardMetrics({
+  metrics,
+}: {
+  metrics: readonly RegularDashboardMetric[];
+}) {
+  return (
+    <section
+      className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
+      aria-label="Dashboard metrics"
+    >
+      {metrics.map((metric) => (
+        <DashboardMetricCard
+          key={metric.label}
+          label={metric.label}
+          value={metric.value}
+          tone={metric.tone}
+        />
+      ))}
+    </section>
+  );
+}
+
+// Separate component for table - can be used with its own Suspense
+export function RegularDashboardTable({
+  recentOrders,
+}: {
+  recentOrders: readonly RegularRecentTravelOrder[];
+}) {
+  return (
+    <section aria-labelledby="my-recent-travel-orders-heading">
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2
+            id="my-recent-travel-orders-heading"
+            className="text-2xl font-semibold tracking-tight text-[#2f3339]"
+          >
+            My Recent Travel Orders
+          </h2>
+          <p className="mt-1 text-xs text-[#7b8398]">
+            Latest submissions from your account.
+          </p>
+        </div>
+        <Link
+          href="/regular/travel-orders/create-travel-order"
+          className="inline-flex items-center rounded-lg border border-[#dfe1ed] bg-white px-4 py-2 text-sm font-semibold text-[#5d6780] transition hover:bg-[#f3f5fa]"
+        >
+          Submit Travel Order
+        </Link>
+      </div>
+
+      <div className="overflow-x-auto overflow-y-auto rounded-2xl border border-[#dfe1ed] bg-white max-h-[calc(100vh-300px)]">
+        <table className="min-w-[680px] w-full border-collapse text-left">
+          <thead className="sticky top-0 z-10 bg-[#f3f5fa] text-[#5d6780]">
+            <tr className="border-b border-[#cfd4e2]">
+              <HeaderCell>TO no.</HeaderCell>
+              <HeaderCell>Destination</HeaderCell>
+              <HeaderCell>Travel Dates</HeaderCell>
+              <HeaderCell>Status</HeaderCell>
+            </tr>
+          </thead>
+
+          <tbody className="text-sm text-[#4a5266]">
+            {recentOrders.length > 0 ? (
+              recentOrders.map((row) => (
+                <tr key={row.id} className="border-b border-[#dfe1ed] last:border-b-0">
+                  <BodyCell className="font-semibold">{row.orderNo}</BodyCell>
+                  <BodyCell>
+                    <span className="block max-w-[180px] truncate" title={row.destination}>
+                      {row.destination}
+                    </span>
+                  </BodyCell>
+                  <BodyCell className="whitespace-nowrap">
+                    {row.departureDateLabel} - {row.returnDateLabel}
+                  </BodyCell>
+                  <BodyCell>
+                    <StatusPill status={row.status} />
+                  </BodyCell>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td
+                  colSpan={4}
+                  className="px-5 py-10 text-center text-sm text-[#7d8598]"
+                >
+                  No travel orders yet.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+// Legacy combined component for backward compatibility
 type RegularDashboardViewProps = Readonly<{
-  fullName: string;
+  fullName?: string;
   currentDateTime: string;
   metrics: readonly RegularDashboardMetric[];
   recentOrders: readonly RegularRecentTravelOrder[];
@@ -31,87 +129,18 @@ export function RegularDashboardView({
 }: RegularDashboardViewProps) {
   return (
     <div className="space-y-8 lg:space-y-10">
-      <section className="rounded-2xl bg-gradient-to-r from-[#3B9F41] to-[#F0F0F0] p-6 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.15)] sm:p-7">
-        <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-          Welcome Back, {fullName || "User"}!
-        </h2>
-        <p className="mt-2 text-sm text-white/90">{currentDateTime}</p>
-      </section>
+      {/* Welcome section can be rendered by parent for instant loading */}
+      {fullName && (
+        <section className="rounded-2xl bg-gradient-to-r from-[#3B9F41] to-[#F0F0F0] p-6 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.15)] sm:p-7">
+          <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+            Welcome Back, {fullName || "User"}!
+          </h2>
+          <p className="mt-2 text-sm text-white/90">{currentDateTime}</p>
+        </section>
+      )}
 
-      <section
-        className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
-        aria-label="Dashboard metrics"
-      >
-        {metrics.map((metric) => (
-          <DashboardMetricCard
-            key={metric.label}
-            label={metric.label}
-            value={metric.value}
-            tone={metric.tone}
-          />
-        ))}
-      </section>
-
-      <section aria-labelledby="my-recent-travel-orders-heading">
-        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2
-              id="my-recent-travel-orders-heading"
-              className="text-2xl font-semibold tracking-tight text-[#2f3339]"
-            >
-              My Recent Travel Orders
-            </h2>
-            <p className="mt-1 text-xs text-[#7b8398]">
-              Latest submissions from your account.
-            </p>
-          </div>
-          <Link
-            href="/regular/travel-orders"
-            className="inline-flex items-center rounded-lg border border-[#dfe1ed] bg-white px-4 py-2 text-sm font-semibold text-[#5d6780] transition hover:bg-[#f3f5fa]"
-          >
-            Open Travel Orders
-          </Link>
-        </div>
-
-        <div className="overflow-x-auto rounded-2xl border border-[#dfe1ed] bg-white">
-          <table className="min-w-[680px] w-full border-collapse text-left">
-            <thead className="bg-[#f3f5fa] text-[#5d6780]">
-              <tr className="border-b border-[#cfd4e2]">
-                <HeaderCell>TO no.</HeaderCell>
-                <HeaderCell>Destination</HeaderCell>
-                <HeaderCell>Travel Dates</HeaderCell>
-                <HeaderCell>Status</HeaderCell>
-              </tr>
-            </thead>
-
-            <tbody className="text-sm text-[#4a5266]">
-              {recentOrders.length > 0 ? (
-                recentOrders.map((row) => (
-                  <tr key={row.id} className="border-b border-[#dfe1ed] last:border-b-0">
-                    <BodyCell className="font-semibold">{row.orderNo}</BodyCell>
-                    <BodyCell>{row.destination}</BodyCell>
-                    <BodyCell>
-                      {row.departureDateLabel} - {row.returnDateLabel}
-                    </BodyCell>
-                    <BodyCell>
-                      <StatusPill status={row.status} />
-                    </BodyCell>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td
-                    colSpan={4}
-                    className="px-5 py-10 text-center text-sm text-[#7d8598]"
-                  >
-                    No travel orders yet.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <RegularDashboardMetrics metrics={metrics} />
+      <RegularDashboardTable recentOrders={recentOrders} />
     </div>
   );
 }

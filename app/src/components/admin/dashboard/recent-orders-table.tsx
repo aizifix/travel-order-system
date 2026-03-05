@@ -19,9 +19,9 @@ export function RecentTravelOrdersTable({
   rows,
 }: RecentTravelOrdersTableProps) {
   return (
-    <div className="overflow-x-auto rounded-2xl border border-[#dfe1ed] bg-white w-full">
+    <div className="overflow-x-auto overflow-y-auto rounded-2xl border border-[#dfe1ed] bg-white w-full max-h-[calc(100vh-300px)]">
       <table className="min-w-[860px] w-full border-collapse text-left">
-        <thead className="bg-[#f3f5fa] text-[#5d6780]">
+        <thead className="sticky top-0 z-10 bg-[#f3f5fa] text-[#5d6780]">
           <tr className="border-b border-[#cfd4e2]">
             <HeaderCell>TO no.</HeaderCell>
             <HeaderCell>Date Posted</HeaderCell>
@@ -43,15 +43,19 @@ export function RecentTravelOrdersTable({
                 <BodyCell className="font-semibold">{row.toNo}</BodyCell>
                 <BodyCell>{row.datePosted}</BodyCell>
                 <BodyCell className="font-medium">{row.requestedBy}</BodyCell>
-                <BodyCell className="font-medium">{row.destination}</BodyCell>
-                <BodyCell>{row.travelDates}</BodyCell>
+                <BodyCell className="font-medium">
+                  <span className="block max-w-[180px] truncate" title={row.destination}>
+                    {row.destination}
+                  </span>
+                </BodyCell>
+                <BodyCell className="whitespace-nowrap">{row.travelDates}</BodyCell>
                 <BodyCell>
                   <StatusPill status={row.status} />
                 </BodyCell>
                 <BodyCell>
                   <button
                     type="button"
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[#3c414b] transition hover:bg-black/5"
+                    className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-[#3c414b] transition hover:bg-black/5"
                     aria-label={`Open actions for ${row.toNo}`}
                   >
                     <VerticalDotsIcon />

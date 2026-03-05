@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
 
 :root {
   --background: #ffffff;
@@ -19,10 +20,67 @@
   }
 }
 
+html,
+body {
+  min-height: 100dvh;
+  overflow-x: hidden;
+}
+
+html {
+  background: #f4f5f8;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-poppins), Arial, Helvetica, sans-serif;
+  margin: 0;
+  padding: 0;
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: #e6ebf3;
+}
+
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0) 20%,
+    rgba(255, 255, 255, 0.72) 50%,
+    rgba(255, 255, 255, 0) 80%
+  );
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+}
+
+/* Respect user system preference to reduce non-essential motion. */
+@media (prefers-reduced-motion: reduce) {
+  html:focus-within {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Scrollbar hide utility */
@@ -33,4 +91,23 @@ body {
 
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
+}
+
+/* Monochrome style scoped to admin approval turnaround map only. */
+.approval-white-map .leaflet-container {
+  background: #ffffff;
+}
+
+.approval-white-map .leaflet-tile-pane {
+  filter: grayscale(1) saturate(0.12) brightness(1.18) contrast(0.92);
+}
+
+.approval-white-map .leaflet-control-attribution {
+  background: rgba(255, 255, 255, 0.88);
+  color: #7d8598;
+  font-size: 10px;
+}
+
+.approval-white-map .leaflet-control-attribution a {
+  color: #5d6780;
 }

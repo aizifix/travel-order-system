@@ -58,8 +58,8 @@ export function SelectField({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const handleSelect = (optionId: number) => {
-    setSelectedValue(optionId.toString());
+  const handleSelect = (optionValue: string) => {
+    setSelectedValue(optionValue);
     setIsOpen(false);
     setSearch("");
   };
@@ -85,7 +85,7 @@ export function SelectField({
         type="button"
         onClick={() => !disabled && setIsOpen(!isOpen)}
         disabled={disabled || options.length === 0}
-        className={`flex h-10 w-full items-center justify-between rounded-lg border bg-white px-3 text-sm transition-all duration-200 
+        className={`flex h-10 w-full cursor-pointer items-center justify-between rounded-lg border bg-white px-3 text-sm transition-all duration-200 
           ${isOpen 
             ? "border-[#3B9F41] ring-1 ring-[#3B9F41]" 
             : "border-[#dfe1ed] hover:border-[#b8bcc9]"
@@ -135,8 +135,8 @@ export function SelectField({
               {includeEmptyOption && (
                 <button
                   type="button"
-                  onClick={() => handleSelect(0)}
-                  className="flex w-full items-center justify-between px-3 py-2 text-left text-sm text-[#6b7280] hover:bg-[#f3f5fa]"
+                  onClick={() => handleSelect("")}
+                  className="flex w-full cursor-pointer items-center justify-between px-3 py-2 text-left text-sm text-[#6b7280] hover:bg-[#f3f5fa]"
                 >
                   <span>{emptyOptionLabel}</span>
                 </button>
@@ -150,8 +150,8 @@ export function SelectField({
                   <button
                     key={option.id}
                     type="button"
-                    onClick={() => handleSelect(option.id)}
-                    className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors hover:bg-[#f3f5fa] ${
+                    onClick={() => handleSelect(option.id.toString())}
+                    className={`flex w-full cursor-pointer items-center justify-between px-3 py-2 text-left text-sm transition-colors hover:bg-[#f3f5fa] ${
                       selectedValue === option.id.toString()
                         ? "bg-[#f0fdf4] text-[#3B9F41]"
                         : "text-[#2f3339]"

@@ -1,7 +1,12 @@
 import { Suspense } from "react";
 import { requireRole } from "@/src/server/auth/guards";
 import { getUserWithDivision } from "@/src/server/auth/service";
-import { getAllTravelOrdersForAdmin } from "@/src/server/travel-orders/service";
+import {
+  getAllTravelOrdersForAdminPaginated,
+  type TravelOrderPagination,
+  type TravelOrderSortColumn,
+  type TravelOrderSortDirection,
+} from "@/src/server/travel-orders/service";
 import { AdminShell } from "@/src/components/admin/admin-shell";
 import { AdminTravelOrdersView } from "@/src/components/admin/travel-orders/travel-orders-view";
 import { TableSkeleton } from "@/src/components/ui/skeleton";
@@ -20,6 +25,25 @@ function firstQueryValue(value: string | string[] | undefined): string | undefin
     return value[0];
   }
   return value;
+}
+
+function parseSearchParams(searchParams: {
+  [key: string]: string | string[] | undefined;
+}) {
+  const search = firstQueryValue(searchParams.search);
+  const status = firstQueryValue(searchParams.status) ?? "all";
+  const sortBy = firstQueryValue(searchParams.sortBy) as TravelOrderSortColumn | undefined;
+  const sortDir = firstQueryValue(searchParams.sortDir) as TravelOrderSortDirection | undefined;
+  const page =
+    typeof searchParams.page === "string"
+      ? parseInt(searchParams.page, 10)
+      : 1;
+  const limit =
+    typeof searchParams.limit === "string"
+      ? parseInt(searchParams.limit, 10)
+      : 10;
+
+  return { search, status, sortBy, sortDir, page, limit };
 }
 
 function toPositiveInteger(value: string | undefined): number | undefined {
@@ -86,14 +110,17 @@ async function TravelOrdersTableWrapper({
   feedback?: ReturnType<typeof getFeedback>;
 }) {
   const resolvedSearchParams = await searchParams;
+  const filter = parseSearchParams(resolvedSearchParams);
   const initialOrderId = toPositiveInteger(
     firstQueryValue(resolvedSearchParams.travelOrderId),
   );
-  const rows = await getAllTravelOrdersForAdmin(40);
+  const result = await getAllTravelOrdersForAdminPaginated(filter);
 
   return (
     <AdminTravelOrdersView
-      rows={rows}
+      rows={result.items}
+      pagination={result.pagination}
+      currentFilter={filter}
       onReview={reviewTravelOrderStep2Action}
       initialOrderId={initialOrderId}
       feedback={feedback}
@@ -111,7 +138,7 @@ export default async function AdminTravelOrdersPage({
 
   return (
     <AdminShell
-      title=""
+      title="Travel Orders"
       activeItem="travel-orders"
       user={
         userData

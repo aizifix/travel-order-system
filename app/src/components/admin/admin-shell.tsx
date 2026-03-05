@@ -37,8 +37,8 @@ const OVERVIEW_ITEMS: readonly RoleShellNavItem[] = [
   },
   {
     key: "ptr-summary",
-    label: "PT Summary",
-    disabled: true,
+    label: "PTR Summary",
+    href: "/admin/ptr-summary",
     icon: "ptr-summary",
   },
   { key: "users", label: "Users", href: "/admin/users", icon: "users" },
@@ -61,7 +61,12 @@ export function AdminShell({
       title={title}
       activeItem={activeItem}
       user={user}
-      headerAction={headerAction ?? <LiveNotificationBell role="admin" />}
+      headerAction={
+        <div className="flex items-center gap-3">
+          <LiveNotificationBell role="admin" />
+          {headerAction}
+        </div>
+      }
       overviewItems={OVERVIEW_ITEMS}
       toolItems={TOOL_ITEMS}
     >

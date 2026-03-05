@@ -33,7 +33,9 @@ type ToastItem = Readonly<{
   description?: string;
 }>;
 
-const DEFAULT_DURATION_MS = 3200;
+const DEFAULT_DURATION_MS = 1800;
+const MIN_DURATION_MS = 300;
+const MAX_DURATION_MS = 20000;
 const ToastContext = createContext<ToastContextValue | null>(null);
 const noopSubscribe = () => () => {};
 
@@ -72,9 +74,12 @@ export function ToastProvider({
       };
 
       setToasts((current) => [...current, nextToast]);
+      const normalizedDurationMs = Number.isFinite(durationMs)
+        ? Math.min(MAX_DURATION_MS, Math.max(MIN_DURATION_MS, durationMs))
+        : DEFAULT_DURATION_MS;
       const timeoutId = window.setTimeout(() => {
         dismissToast(id);
-      }, Math.max(800, durationMs));
+      }, normalizedDurationMs);
       timeoutMapRef.current.set(id, timeoutId);
     },
     [dismissToast],
@@ -162,7 +167,7 @@ function ToastCard({
         <button
           type="button"
           onClick={() => onDismiss(toast.id)}
-          className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[#7d8598] transition hover:bg-[#f3f5fa] hover:text-[#1a1d1f]"
+          className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md text-[#7d8598] transition hover:bg-[#f3f5fa] hover:text-[#1a1d1f]"
           aria-label="Dismiss notification"
         >
           <X className="h-4 w-4" />

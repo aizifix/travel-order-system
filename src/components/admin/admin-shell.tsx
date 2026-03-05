@@ -102,7 +102,7 @@ export function AdminShell({
               <form action="/api/auth/logout" method="post" className="mt-2">
                 <button
                   type="submit"
-                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[13px] font-medium text-white/95 transition hover:bg-white/10"
+                  className="flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-left text-[13px] font-medium text-white/95 transition hover:bg-white/10"
                 >
                   <LogOut className="h-5 w-5" aria-hidden="true" />
                   <span>Log Out</span>
@@ -113,15 +113,6 @@ export function AdminShell({
         </aside>
 
         <div className="min-w-0 flex-1">
-          <header className="px-4 pt-5 sm:px-8 lg:px-10 lg:pt-7">
-            <div className="mx-auto flex w-full items-center justify-between gap-4">
-              <h1 className="text-2xl font-semibold tracking-tight text-[#30343a] sm:text-[2rem]">
-                {title}
-              </h1>
-              {headerAction ?? <NotificationBellButton />}
-            </div>
-          </header>
-
           <main className="px-4 pb-8 pt-4 sm:px-8 lg:px-10 lg:pb-10 lg:pt-5">
             <div className="mx-auto w-full">{children}</div>
           </main>
@@ -190,7 +181,7 @@ export function NotificationBellButton({
   return (
     <button
       type="button"
-      className="relative inline-flex h-11 w-11 items-center justify-center rounded-full bg-transparent text-[#343a40] transition hover:bg-black/5"
+      className="relative inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded-full bg-transparent text-[#343a40] transition hover:bg-black/5"
       aria-label="Notifications"
     >
       <Bell className="h-7 w-7" aria-hidden="true" />

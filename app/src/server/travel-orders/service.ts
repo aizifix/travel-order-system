@@ -3,7 +3,7 @@ import { getDbPool } from "@/src/server/db/mysql";
 import type { NotificationType } from "@/src/server/notifications/model";
 import {
   createAndPush,
-  pushTravelOrderStatusChanged,
+  pushTravelOrderStatusChangedToUsers,
 } from "@/src/server/notifications/service";
 
 const DRAFT_STATUS_ID = 1;
@@ -12,6 +12,9 @@ const STEP1_APPROVED_STATUS_ID = 3;
 const REJECTED_STATUS_ID = 5;
 const CANCELLED_STATUS_ID = 7;
 const MAX_TRAVEL_ORDER_NUMBER_ATTEMPTS = 6;
+const MAX_TRAVEL_ORDER_DAYS = 5;
+const ONE_DAY_IN_MS = 86_400_000;
+const REQUIRE_CONTIGUOUS_TRIP_DATES = false;
 
 type TravelOrderListRow = RowDataPacket & {
   travel_order_id: number;
@@ -40,6 +43,38 @@ export type RecentTravelOrderItem = Readonly<{
   returnDateLabel: string;
   status: string;
   createdAtLabel: string;
+}>;
+
+export type TravelOrderSortColumn =
+  | "orderNo"
+  | "orderDate"
+  | "requestedBy"
+  | "destination"
+  | "purpose"
+  | "departureDate"
+  | "status";
+
+export type TravelOrderSortDirection = "asc" | "desc";
+
+export type TravelOrderPagination = Readonly<{
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}>;
+
+export type TravelOrderFilter = Readonly<{
+  search?: string;
+  status?: string;
+  sortBy?: TravelOrderSortColumn;
+  sortDir?: TravelOrderSortDirection;
+  page?: number;
+  limit?: number;
+}>;
+
+export type TravelOrderPaginatedResult = Readonly<{
+  items: readonly RequesterTravelOrderItem[];
+  pagination: TravelOrderPagination;
 }>;
 
 type TravelOrderCountRow = RowDataPacket & {
@@ -106,6 +141,24 @@ export type TravelOrderRequesterProfile = Readonly<{
   employmentStatusName: string | null;
 }>;
 
+export type TravelOrderTripInput = Readonly<{
+  specificDestination: string;
+  specificPurpose: string;
+  departureDate: string;
+  returnDate: string;
+}>;
+
+export type TravelOrderTrip = Readonly<{
+  id: number;
+  travelOrderId: number;
+  tripOrder: number;
+  specificDestination: string;
+  specificPurpose: string;
+  departureDate: string;
+  returnDate: string;
+  days: number;
+}>;
+
 export type CreateRegularTravelOrderInput = Readonly<{
   travelTypeId: number | null;
   transportationId: number | null;
@@ -120,6 +173,7 @@ export type CreateRegularTravelOrderInput = Readonly<{
   recommendingApproverId: number | null;
   hasOtherStaff: boolean;
   travelStatusRemarks: string;
+  trips?: readonly TravelOrderTripInput[];
   submitForApproval: boolean;
 }>;
 
@@ -137,6 +191,7 @@ export type UpdateRegularTravelOrderInput = Readonly<{
   recommendingApproverId: number | null;
   hasOtherStaff: boolean;
   travelStatusRemarks: string;
+  trips?: readonly TravelOrderTripInput[];
 }>;
 
 export type CreateRegularTravelOrderResult = Readonly<
@@ -209,6 +264,16 @@ type RequesterOwnedTravelOrderRow = RowDataPacket & {
   recommending_approver_id: number | null;
 };
 
+type TravelOrderTripRow = RowDataPacket & {
+  trip_id: number;
+  travel_order_id: number;
+  trip_order: number;
+  specific_destination: string;
+  specific_purpose: string;
+  departure_date_iso: string | null;
+  return_date_iso: string | null;
+};
+
 type ApproverOwnedTravelOrderRow = RowDataPacket & {
   travel_order_id: number;
   travel_order_no: string;
@@ -245,6 +310,7 @@ export type RequesterTravelOrderItem = RecentTravelOrderItem &
     fundingSource: string;
     remarks: string;
     travelDays: number;
+    trips: readonly TravelOrderTrip[];
     hasOtherStaff: boolean;
     travelStatusRemarks: string;
     step1: RequesterTravelOrderStep;
@@ -308,7 +374,26 @@ type NormalizedTravelOrderInput = Readonly<{
   recommendingApproverId: number | null;
   hasOtherStaff: boolean;
   travelStatusRemarks: string;
+  trips: readonly NormalizedTravelOrderTripInput[];
 }>;
+
+type NormalizedTravelOrderTripInput = Readonly<{
+  tripOrder: number;
+  specificDestination: string;
+  specificPurpose: string;
+  departureDate: string;
+  returnDate: string;
+  days: number;
+}>;
+
+type TravelOrderTripSourceInput = Readonly<
+  Pick<
+    CreateRegularTravelOrderInput,
+    "specificDestination" | "specificPurpose" | "departureDate" | "returnDate" | "trips"
+  >
+>;
+
+type DbConnection = Awaited<ReturnType<ReturnType<typeof getDbPool>["getConnection"]>>;
 
 type TravelOrderLookupCheckRow = RowDataPacket & {
   has_travel_type: 0 | 1;
@@ -329,10 +414,13 @@ type ApproverPendingNotificationRow = RowDataPacket & {
   travel_order_date_label: string | null;
 };
 
+type ActiveAdminRow = RowDataPacket & {
+  user_id: number;
+};
+
 type TravelOrderNotificationPayload = Readonly<{
   userId: number;
   travelOrderId: number;
-  newStatus: string;
   title: string;
   message: string;
   notificationType: NotificationType;
@@ -367,11 +455,97 @@ function queueTravelOrderNotification(payload: TravelOrderNotificationPayload): 
     } catch (error) {
       console.error("queueTravelOrderNotification failed", error);
     }
+  })();
+}
 
-    pushTravelOrderStatusChanged(payload.userId, {
-      travelOrderId: payload.travelOrderId,
-      newStatus: payload.newStatus,
-    });
+type TravelOrderNotificationToAdminsPayload = Readonly<{
+  travelOrderId: number;
+  title: string;
+  message: string;
+  notificationType: NotificationType;
+}>;
+
+function queueTravelOrderNotificationToAdmins(payload: TravelOrderNotificationToAdminsPayload): void {
+  void (async () => {
+    try {
+      const adminUserIds = await getActiveAdminUserIds();
+      for (const adminUserId of adminUserIds) {
+        await createAndPush({
+          userId: adminUserId,
+          travelOrderId: payload.travelOrderId,
+          title: payload.title,
+          message: payload.message,
+          type: payload.notificationType,
+        });
+      }
+    } catch (error) {
+      console.error("queueTravelOrderNotificationToAdmins failed", error);
+    }
+  })();
+}
+
+function toUniqueUserIds(userIds: readonly (number | null | undefined)[]): number[] {
+  const uniqueUserIds = new Set<number>();
+  for (const userId of userIds) {
+    if (typeof userId === "number" && Number.isInteger(userId) && userId > 0) {
+      uniqueUserIds.add(userId);
+    }
+  }
+  return [...uniqueUserIds];
+}
+
+async function getActiveAdminUserIds(): Promise<readonly number[]> {
+  const pool = getDbPool();
+
+  try {
+    const [rows] = await pool.execute<ActiveAdminRow[]>(
+      `
+        SELECT user_id
+        FROM users
+        WHERE user_role = 'admin'
+          AND user_isActive = 1
+      `,
+    );
+
+    return rows.map((row) => row.user_id);
+  } catch (error) {
+    if (isMissingTableError(error)) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+function queueTravelOrderRealtimeUpdate(
+  payload: Readonly<{
+    travelOrderId: number;
+    newStatus: string;
+    relatedUserIds: readonly (number | null | undefined)[];
+  }>,
+): void {
+  void (async () => {
+    try {
+      const adminUserIds = await getActiveAdminUserIds();
+      const targetUserIds = toUniqueUserIds([
+        ...payload.relatedUserIds,
+        ...adminUserIds,
+      ]);
+
+      console.log("[queueTravelOrderRealtimeUpdate] travelOrderId:", payload.travelOrderId, "newStatus:", payload.newStatus, "targetUserIds:", targetUserIds);
+
+      if (targetUserIds.length === 0) {
+        console.log("[queueTravelOrderRealtimeUpdate] No target users to notify");
+        return;
+      }
+
+      pushTravelOrderStatusChangedToUsers(targetUserIds, {
+        travelOrderId: payload.travelOrderId,
+        newStatus: payload.newStatus,
+      });
+      console.log("[queueTravelOrderRealtimeUpdate] Events sent to", targetUserIds.length, "users");
+    } catch (error) {
+      console.error("queueTravelOrderRealtimeUpdate failed", error);
+    }
   })();
 }
 
@@ -412,6 +586,7 @@ function mapRequesterTravelOrderRow(
     fundingSource: row.travel_order_fundingSource ?? "",
     remarks: row.travel_order_remarks ?? "",
     travelDays: row.travel_order_days,
+    trips: [],
     hasOtherStaff: row.has_other_staff === 1,
     travelStatusRemarks: row.travel_status_remarks ?? "",
     step1: {
@@ -433,6 +608,99 @@ function mapRequesterTravelOrderRow(
       remarks: row.step2_remarks ?? "",
     },
   };
+}
+
+function mapTravelOrderTripRow(row: TravelOrderTripRow): TravelOrderTrip {
+  const departureDate = row.departure_date_iso ?? "";
+  const returnDate = row.return_date_iso ?? "";
+
+  return {
+    id: row.trip_id,
+    travelOrderId: row.travel_order_id,
+    tripOrder: row.trip_order,
+    specificDestination: row.specific_destination,
+    specificPurpose: row.specific_purpose,
+    departureDate,
+    returnDate,
+    days:
+      departureDate && returnDate ? Math.max(1, daysBetweenInclusive(departureDate, returnDate)) : 1,
+  };
+}
+
+async function getTripsByTravelOrderIds(
+  travelOrderIds: readonly number[],
+): Promise<ReadonlyMap<number, readonly TravelOrderTrip[]>> {
+  const uniqueIds = [...new Set(travelOrderIds)].filter(
+    (id): id is number => Number.isInteger(id) && id > 0,
+  );
+  if (uniqueIds.length === 0) {
+    return new Map();
+  }
+
+  const pool = getDbPool();
+  const placeholders = uniqueIds.map(() => "?").join(", ");
+
+  try {
+    const [tripRows] = await pool.execute<TravelOrderTripRow[]>(
+      `
+        SELECT
+          trip_id,
+          travel_order_id,
+          trip_order,
+          specific_destination,
+          specific_purpose,
+          DATE_FORMAT(departure_date, '%Y-%m-%d') AS departure_date_iso,
+          DATE_FORMAT(return_date, '%Y-%m-%d') AS return_date_iso
+        FROM travel_order_trips
+        WHERE travel_order_id IN (${placeholders})
+        ORDER BY travel_order_id ASC, trip_order ASC, departure_date ASC, trip_id ASC
+      `,
+      uniqueIds,
+    );
+
+    const tripsByTravelOrderId = new Map<number, TravelOrderTrip[]>();
+    for (const tripRow of tripRows) {
+      const mappedTrip = mapTravelOrderTripRow(tripRow);
+      const existingTrips = tripsByTravelOrderId.get(tripRow.travel_order_id);
+      if (existingTrips) {
+        existingTrips.push(mappedTrip);
+      } else {
+        tripsByTravelOrderId.set(tripRow.travel_order_id, [mappedTrip]);
+      }
+    }
+
+    return tripsByTravelOrderId;
+  } catch (error) {
+    if (isMissingTableError(error)) {
+      return new Map();
+    }
+    throw error;
+  }
+}
+
+function mergeTripsIntoOrders(
+  orders: readonly RequesterTravelOrderItem[],
+  tripsByTravelOrderId: ReadonlyMap<number, readonly TravelOrderTrip[]>,
+): readonly RequesterTravelOrderItem[] {
+  return orders.map((order) => ({
+    ...order,
+    trips: tripsByTravelOrderId.get(order.id) ?? [],
+  }));
+}
+
+async function mapRequesterTravelOrderRowsWithTrips(
+  rows: readonly RequesterTravelOrderListRow[],
+): Promise<readonly RequesterTravelOrderItem[]> {
+  if (rows.length === 0) {
+    return [];
+  }
+
+  const mappedOrders = rows.map(mapRequesterTravelOrderRow);
+  const tripsByTravelOrderId = await getTripsByTravelOrderIds(
+    mappedOrders.map((order) => order.id),
+  );
+
+  return mergeTripsIntoOrders(mappedOrders, tripsByTravelOrderId);
 }
 
 function mapApproverNotificationRow(
@@ -484,7 +752,7 @@ function daysBetweenInclusive(startIso: string, endIso: string): number {
   const startMs = new Date(`${startIso}T00:00:00Z`).getTime();
   const endMs = new Date(`${endIso}T00:00:00Z`).getTime();
   const diff = endMs - startMs;
-  return Math.floor(diff / 86_400_000) + 1;
+  return Math.floor(diff / ONE_DAY_IN_MS) + 1;
 }
 
 function buildTravelOrderNo(attempt: number): string {
@@ -513,6 +781,164 @@ function getStep1StatusForAction(
   };
 }
 
+function addDaysToIsoDate(isoDate: string, days: number): string {
+  const baseMs = new Date(`${isoDate}T00:00:00Z`).getTime();
+  const shifted = new Date(baseMs + days * ONE_DAY_IN_MS);
+  return shifted.toISOString().slice(0, 10);
+}
+
+function calculateTravelOrderDaysFromTrips(
+  trips: readonly Pick<NormalizedTravelOrderTripInput, "days">[],
+): number {
+  return trips.reduce((sum, trip) => sum + trip.days, 0);
+}
+
+function normalizeTravelOrderTrips(
+  input: TravelOrderTripSourceInput,
+  options: Readonly<{ requireContiguousDates: boolean }>,
+):
+  | Readonly<{
+      ok: true;
+      data: Readonly<{
+        trips: readonly NormalizedTravelOrderTripInput[];
+        specificDestination: string;
+        specificPurpose: string;
+        travelDays: number;
+        departureDate: string;
+        returnDate: string;
+      }>;
+    }>
+  | Readonly<{
+      ok: false;
+      message: string;
+    }> {
+  const rawTrips =
+    Array.isArray(input.trips) && input.trips.length > 0
+      ? [...input.trips]
+      : [
+          {
+            specificDestination: input.specificDestination,
+            specificPurpose: input.specificPurpose,
+            departureDate: input.departureDate,
+            returnDate: input.returnDate,
+          },
+        ];
+
+  if (rawTrips.length === 0) {
+    return {
+      ok: false,
+      message: "At least one trip destination is required.",
+    };
+  }
+
+  const normalizedTrips: NormalizedTravelOrderTripInput[] = [];
+
+  for (const [index, trip] of rawTrips.entries()) {
+    const label = `Trip ${index + 1}`;
+    const specificDestination = normalizeOptionalText(trip.specificDestination, 2000);
+    const specificPurpose = normalizeOptionalText(trip.specificPurpose, 2000);
+    const departureDate = parseIsoDate(trip.departureDate);
+    const returnDate = parseIsoDate(trip.returnDate);
+
+    if (!specificDestination || !specificPurpose) {
+      return {
+        ok: false,
+        message: `${label} must include a specific destination and specific purpose.`,
+      };
+    }
+
+    if (!departureDate || !returnDate) {
+      return {
+        ok: false,
+        message: `${label} must include valid departure and return dates.`,
+      };
+    }
+
+    const days = daysBetweenInclusive(departureDate, returnDate);
+    if (days < 1) {
+      return {
+        ok: false,
+        message: `${label} return date must be the same as or later than departure date.`,
+      };
+    }
+
+    normalizedTrips.push({
+      tripOrder: index + 1,
+      specificDestination,
+      specificPurpose,
+      departureDate,
+      returnDate,
+      days,
+    });
+  }
+
+  const sortedTrips = [...normalizedTrips]
+    .sort((left, right) => {
+      const departureDiff = left.departureDate.localeCompare(right.departureDate);
+      if (departureDiff !== 0) {
+        return departureDiff;
+      }
+
+      const returnDiff = left.returnDate.localeCompare(right.returnDate);
+      if (returnDiff !== 0) {
+        return returnDiff;
+      }
+
+      return left.tripOrder - right.tripOrder;
+    })
+    .map((trip, index) => ({
+      ...trip,
+      tripOrder: index + 1,
+    }));
+
+  for (let index = 1; index < sortedTrips.length; index += 1) {
+    const previousTrip = sortedTrips[index - 1];
+    const currentTrip = sortedTrips[index];
+
+    if (currentTrip.departureDate <= previousTrip.returnDate) {
+      return {
+        ok: false,
+        message:
+          "Trip dates must not overlap. Adjust the date ranges and try again.",
+      };
+    }
+
+    if (options.requireContiguousDates) {
+      const expectedDeparture = addDaysToIsoDate(previousTrip.returnDate, 1);
+      if (currentTrip.departureDate !== expectedDeparture) {
+        return {
+          ok: false,
+          message:
+            "Trips must be contiguous without date gaps. Adjust the date ranges and try again.",
+        };
+      }
+    }
+  }
+
+  const travelDays = calculateTravelOrderDaysFromTrips(sortedTrips);
+  if (travelDays < 1 || travelDays > MAX_TRAVEL_ORDER_DAYS) {
+    return {
+      ok: false,
+      message: `Total travel days across all trips must be between 1 and ${MAX_TRAVEL_ORDER_DAYS}.`,
+    };
+  }
+
+  const firstTrip = sortedTrips[0];
+  const lastTrip = sortedTrips[sortedTrips.length - 1];
+
+  return {
+    ok: true,
+    data: {
+      trips: sortedTrips,
+      specificDestination: sortedTrips.map((trip) => trip.specificDestination).join("\n"),
+      specificPurpose: sortedTrips.map((trip) => trip.specificPurpose).join("\n"),
+      travelDays,
+      departureDate: firstTrip.departureDate,
+      returnDate: lastTrip.returnDate,
+    },
+  };
+}
+
 function normalizeTravelOrderInput(
   input: Omit<CreateRegularTravelOrderInput, "submitForApproval">,
 ):
@@ -529,60 +955,44 @@ function normalizeTravelOrderInput(
   const programId = input.programId;
   const recommendingApproverId = input.recommendingApproverId;
 
-  const specificDestination = normalizeOptionalText(input.specificDestination, 2000);
-  const specificPurpose = normalizeOptionalText(input.specificPurpose, 2000);
   const fundingSource = normalizeOptionalText(input.fundingSource, 255);
   const remarks = normalizeOptionalText(input.remarks, 2000);
   const travelStatusRemarks = normalizeOptionalText(input.travelStatusRemarks, 2000);
 
-  const departureDate = parseIsoDate(input.departureDate);
-  const returnDate = parseIsoDate(input.returnDate);
-  const travelDaysValue = input.travelDays;
-
   if (
     !Number.isInteger(travelTypeId) ||
-    !Number.isInteger(transportationId) ||
-    !Number.isInteger(travelDaysValue) ||
-    !departureDate ||
-    !returnDate
+    !Number.isInteger(transportationId)
   ) {
     return {
       ok: false,
       message:
-        "Travel type, transportation, dates, and number of days are required.",
+        "Travel type, transportation, and at least one valid trip are required.",
     };
   }
 
-  if (!specificDestination || !specificPurpose) {
-    return {
-      ok: false,
-      message: "Specific destination and purpose are required.",
-    };
+  const normalizedTripsResult = normalizeTravelOrderTrips(input, {
+    requireContiguousDates: REQUIRE_CONTIGUOUS_TRIP_DATES,
+  });
+  if (!normalizedTripsResult.ok) {
+    return normalizedTripsResult;
   }
 
-  const travelDays = travelDaysValue as number;
+  // Backward compatibility: legacy form still submits aggregate fields.
+  if (!Array.isArray(input.trips) || input.trips.length === 0) {
+    if (!Number.isInteger(input.travelDays)) {
+      return {
+        ok: false,
+        message: "Travel days is required.",
+      };
+    }
 
-  if (travelDays < 1 || travelDays > 5) {
-    return {
-      ok: false,
-      message: "Travel days must be between 1 and 5.",
-    };
-  }
-
-  const computedDays = daysBetweenInclusive(departureDate, returnDate);
-  if (computedDays < 1) {
-    return {
-      ok: false,
-      message: "Return date must be the same as or later than departure date.",
-    };
-  }
-
-  if (travelDays !== computedDays) {
-    return {
-      ok: false,
-      message:
-        "Travel days must match the inclusive range between departure and return dates.",
-    };
+    if (Number(input.travelDays) !== normalizedTripsResult.data.travelDays) {
+      return {
+        ok: false,
+        message:
+          "Travel days must match the inclusive range between departure and return dates.",
+      };
+    }
   }
 
   const normalizedTravelTypeId = Number(travelTypeId);
@@ -594,18 +1004,234 @@ function normalizeTravelOrderInput(
       travelTypeId: normalizedTravelTypeId,
       transportationId: normalizedTransportationId,
       programId,
-      specificDestination,
-      specificPurpose,
+      specificDestination: normalizedTripsResult.data.specificDestination,
+      specificPurpose: normalizedTripsResult.data.specificPurpose,
       fundingSource,
       remarks,
-      travelDays,
-      departureDate,
-      returnDate,
+      travelDays: normalizedTripsResult.data.travelDays,
+      departureDate: normalizedTripsResult.data.departureDate,
+      returnDate: normalizedTripsResult.data.returnDate,
       recommendingApproverId,
       hasOtherStaff: input.hasOtherStaff,
       travelStatusRemarks,
+      trips: normalizedTripsResult.data.trips,
     },
   };
+}
+
+async function insertTravelOrderTripsInTransaction(
+  connection: DbConnection,
+  travelOrderId: number,
+  trips: readonly NormalizedTravelOrderTripInput[],
+): Promise<void> {
+  for (const trip of trips) {
+    await connection.execute<ResultSetHeader>(
+      `
+        INSERT INTO travel_order_trips (
+          travel_order_id,
+          trip_order,
+          specific_destination,
+          specific_purpose,
+          departure_date,
+          return_date
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+      `,
+      [
+        travelOrderId,
+        trip.tripOrder,
+        trip.specificDestination,
+        trip.specificPurpose,
+        trip.departureDate,
+        trip.returnDate,
+      ],
+    );
+  }
+}
+
+async function replaceTravelOrderTripsInTransaction(
+  connection: DbConnection,
+  travelOrderId: number,
+  trips: readonly NormalizedTravelOrderTripInput[],
+): Promise<void> {
+  await connection.execute<ResultSetHeader>(
+    `
+      DELETE FROM travel_order_trips
+      WHERE travel_order_id = ?
+    `,
+    [travelOrderId],
+  );
+
+  if (trips.length > 0) {
+    await insertTravelOrderTripsInTransaction(connection, travelOrderId, trips);
+  }
+}
+
+export async function getTravelOrderTrips(
+  travelOrderId: number,
+): Promise<readonly TravelOrderTrip[]> {
+  if (!Number.isInteger(travelOrderId) || travelOrderId < 1) {
+    return [];
+  }
+
+  const pool = getDbPool();
+
+  try {
+    const [rows] = await pool.execute<TravelOrderTripRow[]>(
+      `
+        SELECT
+          trip_id,
+          travel_order_id,
+          trip_order,
+          specific_destination,
+          specific_purpose,
+          DATE_FORMAT(departure_date, '%Y-%m-%d') AS departure_date_iso,
+          DATE_FORMAT(return_date, '%Y-%m-%d') AS return_date_iso
+        FROM travel_order_trips
+        WHERE travel_order_id = ?
+        ORDER BY trip_order ASC, departure_date ASC, trip_id ASC
+      `,
+      [travelOrderId],
+    );
+
+    return rows.map(mapTravelOrderTripRow);
+  } catch (error) {
+    if (isMissingTableError(error)) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+export async function createTravelOrderTrips(
+  travelOrderId: number,
+  trips: readonly TravelOrderTripInput[],
+): Promise<readonly TravelOrderTrip[]> {
+  if (!Number.isInteger(travelOrderId) || travelOrderId < 1) {
+    throw new Error("Invalid travel-order reference.");
+  }
+
+  const normalizedTripsResult = normalizeTravelOrderTrips(
+    {
+      specificDestination: "",
+      specificPurpose: "",
+      departureDate: "",
+      returnDate: "",
+      trips,
+    },
+    { requireContiguousDates: REQUIRE_CONTIGUOUS_TRIP_DATES },
+  );
+  if (!normalizedTripsResult.ok) {
+    throw new Error(normalizedTripsResult.message);
+  }
+
+  const pool = getDbPool();
+  const connection = await pool.getConnection();
+
+  const rollbackSilently = async () => {
+    try {
+      await connection.rollback();
+    } catch {
+      // Ignore rollback errors to surface the root cause.
+    }
+  };
+
+  try {
+    await connection.beginTransaction();
+    await insertTravelOrderTripsInTransaction(
+      connection,
+      travelOrderId,
+      normalizedTripsResult.data.trips,
+    );
+    await connection.commit();
+    return getTravelOrderTrips(travelOrderId);
+  } catch (error) {
+    await rollbackSilently();
+    if (isMissingTableError(error)) {
+      return [];
+    }
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+export async function updateTravelOrderTrips(
+  travelOrderId: number,
+  trips: readonly TravelOrderTripInput[],
+): Promise<readonly TravelOrderTrip[]> {
+  if (!Number.isInteger(travelOrderId) || travelOrderId < 1) {
+    throw new Error("Invalid travel-order reference.");
+  }
+
+  const normalizedTripsResult = normalizeTravelOrderTrips(
+    {
+      specificDestination: "",
+      specificPurpose: "",
+      departureDate: "",
+      returnDate: "",
+      trips,
+    },
+    { requireContiguousDates: REQUIRE_CONTIGUOUS_TRIP_DATES },
+  );
+  if (!normalizedTripsResult.ok) {
+    throw new Error(normalizedTripsResult.message);
+  }
+
+  const pool = getDbPool();
+  const connection = await pool.getConnection();
+
+  const rollbackSilently = async () => {
+    try {
+      await connection.rollback();
+    } catch {
+      // Ignore rollback errors to surface the root cause.
+    }
+  };
+
+  try {
+    await connection.beginTransaction();
+    await replaceTravelOrderTripsInTransaction(
+      connection,
+      travelOrderId,
+      normalizedTripsResult.data.trips,
+    );
+    await connection.commit();
+    return getTravelOrderTrips(travelOrderId);
+  } catch (error) {
+    await rollbackSilently();
+    if (isMissingTableError(error)) {
+      return [];
+    }
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+export async function deleteTravelOrderTrips(
+  travelOrderId: number,
+): Promise<void> {
+  if (!Number.isInteger(travelOrderId) || travelOrderId < 1) {
+    return;
+  }
+
+  const pool = getDbPool();
+
+  try {
+    await pool.execute<ResultSetHeader>(
+      `
+        DELETE FROM travel_order_trips
+        WHERE travel_order_id = ?
+      `,
+      [travelOrderId],
+    );
+  } catch (error) {
+    if (isMissingTableError(error)) {
+      return;
+    }
+    throw error;
+  }
 }
 
 function mapRequesterProfile(row: RequesterProfileRow): TravelOrderRequesterProfile {
@@ -850,10 +1476,184 @@ export async function getTravelOrdersForRequester(
       [requesterUserId, safeLimit],
     );
 
-    return rows.map(mapRequesterTravelOrderRow);
+    return mapRequesterTravelOrderRowsWithTrips(rows);
   } catch (error) {
     if (isMissingTableError(error)) {
       return [];
+    }
+    throw error;
+  }
+}
+
+function buildRequesterTravelOrdersQuery(
+  filter: TravelOrderFilter,
+  includeCount = false,
+): { sql: string; params: (number | string)[] } {
+  const baseQuery = `
+    FROM travel_orders t
+    INNER JOIN users u ON u.user_id = t.requester_user_id
+    LEFT JOIN divisions d ON d.division_id = t.division_id
+    LEFT JOIN users rec ON rec.user_id = t.recommending_approver_id
+    LEFT JOIN users fin ON fin.user_id = t.approved_by_user_id
+    LEFT JOIN (
+      SELECT
+        a.travel_order_id,
+        a.action,
+        a.remarks,
+        a.action_at,
+        CONCAT(u2.user_firstName, ' ', u2.user_lastName) AS approver_name
+      FROM travel_order_approvals a
+      INNER JOIN (
+        SELECT travel_order_id, MAX(approval_id) AS latest_approval_id
+        FROM travel_order_approvals
+        WHERE step_no = 1
+        GROUP BY travel_order_id
+      ) latest_step1 ON latest_step1.latest_approval_id = a.approval_id
+      INNER JOIN users u2 ON u2.user_id = a.approver_user_id
+    ) step1 ON step1.travel_order_id = t.travel_order_id
+    LEFT JOIN (
+      SELECT
+        a.travel_order_id,
+        a.action,
+        a.remarks,
+        a.action_at,
+        CONCAT(u3.user_firstName, ' ', u3.user_lastName) AS approver_name
+      FROM travel_order_approvals a
+      INNER JOIN (
+        SELECT travel_order_id, MAX(approval_id) AS latest_approval_id
+        FROM travel_order_approvals
+        WHERE step_no = 2
+        GROUP BY travel_order_id
+      ) latest_step2 ON latest_step2.latest_approval_id = a.approval_id
+      INNER JOIN users u3 ON u3.user_id = a.approver_user_id
+    ) step2 ON step2.travel_order_id = t.travel_order_id
+    INNER JOIN travel_statuses s ON s.travel_status_id = t.travel_status_id
+    WHERE t.requester_user_id = ?
+  `;
+
+  const params: (number | string)[] = [];
+  let whereClause = "";
+
+  if (filter.status && filter.status !== "all") {
+    whereClause += ` AND s.travel_status_name = ?`;
+    params.push(filter.status.toUpperCase());
+  }
+
+  if (filter.search && filter.search.trim()) {
+    const searchTerm = `%${filter.search.trim()}%`;
+    whereClause += ` AND (
+      t.travel_order_no LIKE ? OR
+      t.travel_order_specDestination LIKE ? OR
+      t.travel_order_specPurpose LIKE ?
+    )`;
+    params.push(searchTerm, searchTerm, searchTerm);
+  }
+
+  let orderBy = "ORDER BY t.created_at DESC";
+  if (filter.sortBy && filter.sortDir) {
+    const sortColumnMap: Record<TravelOrderSortColumn, string> = {
+      orderNo: "t.travel_order_no",
+      orderDate: "t.travel_order_date",
+      requestedBy: "CONCAT(u.user_firstName, ' ', u.user_lastName)",
+      destination: "t.travel_order_specDestination",
+      purpose: "t.travel_order_specPurpose",
+      departureDate: "t.travel_order_deptDate",
+      status: "s.travel_status_name",
+    };
+    const col = sortColumnMap[filter.sortBy] || "t.created_at";
+    orderBy = `ORDER BY ${col} ${filter.sortDir.toUpperCase()}`;
+  }
+
+  if (includeCount) {
+    const countSql = `SELECT COUNT(*) as total ${baseQuery} ${whereClause}`;
+    return { sql: countSql, params };
+  }
+
+  const safePage = Math.max(1, Math.trunc(filter.page || 1));
+  const safeLimit = Math.min(100, Math.max(1, Math.trunc(filter.limit || 10)));
+  const offset = (safePage - 1) * safeLimit;
+
+  const selectColumns = `
+    t.travel_order_id,
+    t.travel_order_no,
+    DATE_FORMAT(t.travel_order_date, '%b %e, %Y') AS travel_order_date_label,
+    DATE_FORMAT(t.travel_order_date, '%Y-%m-%d') AS travel_order_date_iso,
+    u.user_firstName AS requester_first_name,
+    u.user_lastName AS requester_last_name,
+    d.division_name,
+    t.travel_order_specDestination,
+    t.travel_order_specPurpose,
+    DATE_FORMAT(t.travel_order_deptDate, '%b %e, %Y') AS travel_order_dept_date_label,
+    DATE_FORMAT(t.travel_order_deptDate, '%Y-%m-%d') AS travel_order_dept_date_iso,
+    DATE_FORMAT(t.travel_order_returnDate, '%b %e, %Y') AS travel_order_return_date_label,
+    DATE_FORMAT(t.travel_order_returnDate, '%Y-%m-%d') AS travel_order_return_date_iso,
+    t.travel_type_id,
+    t.transportation_id,
+    t.program_id,
+    t.recommending_approver_id,
+    t.travel_order_fundingSource,
+    t.travel_order_remarks,
+    t.travel_order_days,
+    t.has_other_staff,
+    t.travel_status_remarks,
+    CONCAT(rec.user_firstName, ' ', rec.user_lastName) AS recommending_approver_name,
+    CONCAT(fin.user_firstName, ' ', fin.user_lastName) AS approved_by_name,
+    step1.action AS step1_action,
+    step1.approver_name AS step1_approver_name,
+    DATE_FORMAT(step1.action_at, '%b %e, %Y %h:%i %p') AS step1_action_at_label,
+    step1.remarks AS step1_remarks,
+    step2.action AS step2_action,
+    step2.approver_name AS step2_approver_name,
+    DATE_FORMAT(step2.action_at, '%b %e, %Y %h:%i %p') AS step2_action_at_label,
+    step2.remarks AS step2_remarks,
+    s.travel_status_name,
+    DATE_FORMAT(t.created_at, '%b %e, %Y') AS created_at_label
+  `;
+
+  const dataSql = `SELECT ${selectColumns} ${baseQuery} ${whereClause} ${orderBy} LIMIT ? OFFSET ?`;
+  const dataParams = [...params, safeLimit, offset];
+
+  return { sql: dataSql, params: dataParams };
+}
+
+export async function getTravelOrdersForRequesterPaginated(
+  requesterUserId: number,
+  filter: TravelOrderFilter,
+): Promise<TravelOrderPaginatedResult> {
+  const pool = getDbPool();
+  const safePage = Math.max(1, Math.trunc(filter.page || 1));
+  const safeLimit = Math.min(100, Math.max(1, Math.trunc(filter.limit || 10)));
+
+  try {
+    const countQuery = buildRequesterTravelOrdersQuery(filter, true);
+    const [countResult] = await pool.execute<RowDataPacket[]>(countQuery.sql, [
+      requesterUserId,
+      ...countQuery.params,
+    ]);
+    const total = (countResult[0]?.total as number) || 0;
+    const totalPages = Math.ceil(total / safeLimit);
+
+    const dataQuery = buildRequesterTravelOrdersQuery(filter, false);
+    const [rows] = await pool.execute<RequesterTravelOrderListRow[]>(dataQuery.sql, [
+      requesterUserId,
+      ...dataQuery.params,
+    ]);
+
+    return {
+      items: await mapRequesterTravelOrderRowsWithTrips(rows),
+      pagination: {
+        page: safePage,
+        limit: safeLimit,
+        total,
+        totalPages,
+      },
+    };
+  } catch (error) {
+    if (isMissingTableError(error)) {
+      return {
+        items: [],
+        pagination: { page: safePage, limit: safeLimit, total: 0, totalPages: 0 },
+      };
     }
     throw error;
   }
@@ -944,25 +1744,198 @@ export async function getTravelOrdersForApprover(
         INNER JOIN travel_statuses s ON s.travel_status_id = t.travel_status_id
         WHERE t.recommending_approver_id = ?
           AND s.travel_status_name IN ('PENDING', 'STEP1_APPROVED', 'APPROVED', 'REJECTED', 'RETURNED')
-        ORDER BY
-          CASE s.travel_status_name
-            WHEN 'PENDING' THEN 0
-            WHEN 'STEP1_APPROVED' THEN 1
-            WHEN 'APPROVED' THEN 2
-            WHEN 'RETURNED' THEN 3
-            WHEN 'REJECTED' THEN 4
-            ELSE 5
-          END,
-          t.created_at DESC
+        ORDER BY t.created_at DESC
         LIMIT ?
       `,
       [approverUserId, safeLimit],
     );
 
-    return rows.map(mapRequesterTravelOrderRow);
+    return mapRequesterTravelOrderRowsWithTrips(rows);
   } catch (error) {
     if (isMissingTableError(error)) {
       return [];
+    }
+    throw error;
+  }
+}
+
+export type ApproverTravelOrderFilter = TravelOrderFilter;
+
+export type ApproverTravelOrderPaginatedResult = Readonly<{
+  items: readonly ApproverTravelOrderItem[];
+  pagination: TravelOrderPagination;
+}>;
+
+function buildApproverTravelOrdersQuery(
+  filter: ApproverTravelOrderFilter,
+  approverUserId: number,
+  includeCount = false,
+): { sql: string; params: (number | string)[] } {
+  const baseQuery = `
+    FROM travel_orders t
+    INNER JOIN users u ON u.user_id = t.requester_user_id
+    LEFT JOIN divisions d ON d.division_id = t.division_id
+    LEFT JOIN users rec ON rec.user_id = t.recommending_approver_id
+    LEFT JOIN users fin ON fin.user_id = t.approved_by_user_id
+    LEFT JOIN (
+      SELECT
+        a.travel_order_id,
+        a.action,
+        a.remarks,
+        a.action_at,
+        CONCAT(u2.user_firstName, ' ', u2.user_lastName) AS approver_name
+      FROM travel_order_approvals a
+      INNER JOIN (
+        SELECT travel_order_id, MAX(approval_id) AS latest_approval_id
+        FROM travel_order_approvals
+        WHERE step_no = 1
+        GROUP BY travel_order_id
+      ) latest_step1 ON latest_step1.latest_approval_id = a.approval_id
+      INNER JOIN users u2 ON u2.user_id = a.approver_user_id
+    ) step1 ON step1.travel_order_id = t.travel_order_id
+    LEFT JOIN (
+      SELECT
+        a.travel_order_id,
+        a.action,
+        a.remarks,
+        a.action_at,
+        CONCAT(u3.user_firstName, ' ', u3.user_lastName) AS approver_name
+      FROM travel_order_approvals a
+      INNER JOIN (
+        SELECT travel_order_id, MAX(approval_id) AS latest_approval_id
+        FROM travel_order_approvals
+        WHERE step_no = 2
+        GROUP BY travel_order_id
+      ) latest_step2 ON latest_step2.latest_approval_id = a.approval_id
+      INNER JOIN users u3 ON u3.user_id = a.approver_user_id
+    ) step2 ON step2.travel_order_id = t.travel_order_id
+    INNER JOIN travel_statuses s ON s.travel_status_id = t.travel_status_id
+    WHERE t.recommending_approver_id = ?
+      AND s.travel_status_name IN ('PENDING', 'STEP1_APPROVED', 'APPROVED', 'REJECTED', 'RETURNED')
+  `;
+
+  const params: (number | string)[] = [approverUserId];
+  let whereClause = "";
+
+  if (filter.status && filter.status !== "all") {
+    whereClause += ` AND s.travel_status_name = ?`;
+    params.push(filter.status.toUpperCase());
+  }
+
+  if (filter.search && filter.search.trim()) {
+    const searchTerm = `%${filter.search.trim()}%`;
+    whereClause += ` AND (
+      t.travel_order_no LIKE ? OR
+      CONCAT(u.user_firstName, ' ', u.user_lastName) LIKE ? OR
+      t.travel_order_specDestination LIKE ? OR
+      t.travel_order_specPurpose LIKE ?
+    )`;
+    params.push(searchTerm, searchTerm, searchTerm, searchTerm);
+  }
+
+  let orderBy = "ORDER BY t.created_at DESC";
+
+  if (filter.sortBy && filter.sortDir) {
+    const sortColumnMap: Record<TravelOrderSortColumn, string> = {
+      orderNo: "t.travel_order_no",
+      orderDate: "t.travel_order_date",
+      requestedBy: "CONCAT(u.user_firstName, ' ', u.user_lastName)",
+      destination: "t.travel_order_specDestination",
+      purpose: "t.travel_order_specPurpose",
+      departureDate: "t.travel_order_deptDate",
+      status: "s.travel_status_name",
+    };
+    const col = sortColumnMap[filter.sortBy] || "t.created_at";
+    orderBy = `ORDER BY ${col} ${filter.sortDir.toUpperCase()}`;
+  }
+
+  if (includeCount) {
+    const countSql = `SELECT COUNT(*) as total ${baseQuery} ${whereClause}`;
+    return { sql: countSql, params };
+  }
+
+  const safePage = Math.max(1, Math.trunc(filter.page || 1));
+  const safeLimit = Math.min(100, Math.max(1, Math.trunc(filter.limit || 10)));
+  const offset = (safePage - 1) * safeLimit;
+
+  const selectColumns = `
+    t.travel_order_id,
+    t.travel_order_no,
+    DATE_FORMAT(t.travel_order_date, '%b %e, %Y') AS travel_order_date_label,
+    DATE_FORMAT(t.travel_order_date, '%Y-%m-%d') AS travel_order_date_iso,
+    u.user_firstName AS requester_first_name,
+    u.user_lastName AS requester_last_name,
+    d.division_name,
+    t.travel_order_specDestination,
+    t.travel_order_specPurpose,
+    DATE_FORMAT(t.travel_order_deptDate, '%b %e, %Y') AS travel_order_dept_date_label,
+    DATE_FORMAT(t.travel_order_deptDate, '%Y-%m-%d') AS travel_order_dept_date_iso,
+    DATE_FORMAT(t.travel_order_returnDate, '%b %e, %Y') AS travel_order_return_date_label,
+    DATE_FORMAT(t.travel_order_returnDate, '%Y-%m-%d') AS travel_order_return_date_iso,
+    t.travel_type_id,
+    t.transportation_id,
+    t.program_id,
+    t.recommending_approver_id,
+    t.travel_order_fundingSource,
+    t.travel_order_remarks,
+    t.travel_order_days,
+    t.has_other_staff,
+    t.travel_status_remarks,
+    CONCAT(rec.user_firstName, ' ', rec.user_lastName) AS recommending_approver_name,
+    CONCAT(fin.user_firstName, ' ', fin.user_lastName) AS approved_by_name,
+    step1.action AS step1_action,
+    step1.approver_name AS step1_approver_name,
+    DATE_FORMAT(step1.action_at, '%b %e, %Y %h:%i %p') AS step1_action_at_label,
+    step1.remarks AS step1_remarks,
+    step2.action AS step2_action,
+    step2.approver_name AS step2_approver_name,
+    DATE_FORMAT(step2.action_at, '%b %e, %Y %h:%i %p') AS step2_action_at_label,
+    step2.remarks AS step2_remarks,
+    s.travel_status_name,
+    DATE_FORMAT(t.created_at, '%b %e, %Y') AS created_at_label
+  `;
+
+  const dataSql = `SELECT ${selectColumns} ${baseQuery} ${whereClause} ${orderBy} LIMIT ? OFFSET ?`;
+  const dataParams = [...params, safeLimit, offset];
+
+  return { sql: dataSql, params: dataParams };
+}
+
+export async function getTravelOrdersForApproverPaginated(
+  approverUserId: number,
+  filter: ApproverTravelOrderFilter,
+): Promise<ApproverTravelOrderPaginatedResult> {
+  const pool = getDbPool();
+  const safePage = Math.max(1, Math.trunc(filter.page || 1));
+  const safeLimit = Math.min(100, Math.max(1, Math.trunc(filter.limit || 10)));
+
+  try {
+    const countQuery = buildApproverTravelOrdersQuery(filter, approverUserId, true);
+    const [countResult] = await pool.execute<RowDataPacket[]>(countQuery.sql, countQuery.params);
+    const total = (countResult[0]?.total as number) || 0;
+    const totalPages = Math.ceil(total / safeLimit);
+
+    const dataQuery = buildApproverTravelOrdersQuery(filter, approverUserId, false);
+    const [rows] = await pool.execute<RequesterTravelOrderListRow[]>(
+      dataQuery.sql,
+      dataQuery.params,
+    );
+
+    return {
+      items: await mapRequesterTravelOrderRowsWithTrips(rows),
+      pagination: {
+        page: safePage,
+        limit: safeLimit,
+        total,
+        totalPages,
+      },
+    };
+  } catch (error) {
+    if (isMissingTableError(error)) {
+      return {
+        items: [],
+        pagination: { page: safePage, limit: safeLimit, total: 0, totalPages: 0 },
+      };
     }
     throw error;
   }
@@ -1270,9 +2243,20 @@ export async function createRegularTravelOrder(
 
     for (let attempt = 0; attempt < MAX_TRAVEL_ORDER_NUMBER_ATTEMPTS; attempt += 1) {
       const orderNo = buildTravelOrderNo(attempt);
+      const connection = await pool.getConnection();
+
+      const rollbackSilently = async () => {
+        try {
+          await connection.rollback();
+        } catch {
+          // Ignore rollback errors to surface the root cause.
+        }
+      };
 
       try {
-        const [insertResult] = await pool.execute<ResultSetHeader>(
+        await connection.beginTransaction();
+
+        const [insertResult] = await connection.execute<ResultSetHeader>(
           `
             INSERT INTO travel_orders (
               travel_order_no,
@@ -1322,22 +2306,46 @@ export async function createRegularTravelOrder(
           ],
         );
 
-        if (
-          statusId === PENDING_STATUS_ID &&
-          Number.isInteger(normalizedInput.recommendingApproverId)
-        ) {
-          queueTravelOrderNotification({
-            userId: Number(normalizedInput.recommendingApproverId),
+        await insertTravelOrderTripsInTransaction(
+          connection,
+          insertResult.insertId,
+          normalizedInput.trips,
+        );
+
+        await connection.commit();
+
+        if (statusId === PENDING_STATUS_ID) {
+          // Notify recommending approver
+          if (Number.isInteger(normalizedInput.recommendingApproverId)) {
+            queueTravelOrderNotification({
+              userId: Number(normalizedInput.recommendingApproverId),
+              travelOrderId: insertResult.insertId,
+              title: `${orderNo} submitted for your review`,
+              message: `${profile.fullName} submitted a travel order to ${firstLine(
+                normalizedInput.specificDestination,
+                120,
+              )}.`,
+              notificationType: "APPROVAL",
+            });
+          }
+
+          // Notify admins about new pending travel order
+          queueTravelOrderNotificationToAdmins({
             travelOrderId: insertResult.insertId,
-            newStatus: "PENDING",
-            title: `${orderNo} submitted for your review`,
+            title: `${orderNo} submitted for approval`,
             message: `${profile.fullName} submitted a travel order to ${firstLine(
               normalizedInput.specificDestination,
               120,
             )}.`,
-            notificationType: "APPROVAL",
+            notificationType: "INFO",
           });
         }
+
+        queueTravelOrderRealtimeUpdate({
+          travelOrderId: insertResult.insertId,
+          newStatus: statusLabel,
+          relatedUserIds: [requesterUserId, normalizedInput.recommendingApproverId],
+        });
 
         return {
           ok: true,
@@ -1346,6 +2354,7 @@ export async function createRegularTravelOrder(
           statusLabel,
         };
       } catch (error) {
+        await rollbackSilently();
         if (hasDuplicateEntryError(error)) {
           continue;
         }
@@ -1357,6 +2366,8 @@ export async function createRegularTravelOrder(
           };
         }
         throw error;
+      } finally {
+        connection.release();
       }
     }
 
@@ -1421,105 +2432,153 @@ export async function updateRegularTravelOrder(
   const pool = getDbPool();
 
   try {
-    const [ownedRows] = await pool.execute<RequesterOwnedTravelOrderRow[]>(
+    const connection = await pool.getConnection();
+
+    const rollbackSilently = async () => {
+      try {
+        await connection.rollback();
+      } catch {
+        // Ignore rollback errors to surface the root cause.
+      }
+    };
+
+    try {
+      await connection.beginTransaction();
+
+      const [ownedRows] = await connection.execute<RequesterOwnedTravelOrderRow[]>(
       `
         SELECT
           travel_order_id,
           travel_order_no,
-          travel_status_id
+          travel_status_id,
+          requester_user_id,
+          recommending_approver_id
         FROM travel_orders
         WHERE travel_order_id = ?
           AND requester_user_id = ?
         LIMIT 1
+        FOR UPDATE
       `,
       [travelOrderId, requesterUserId],
-    );
+      );
 
-    const ownedRow = ownedRows[0];
-    if (!ownedRow) {
-      return {
-        ok: false,
-        message: "Travel order was not found for your account.",
-      };
-    }
+      const ownedRow = ownedRows[0];
+      if (!ownedRow) {
+        await rollbackSilently();
+        return {
+          ok: false,
+          message: "Travel order was not found for your account.",
+        };
+      }
 
-    if (ownedRow.travel_status_id !== PENDING_STATUS_ID) {
-      return {
-        ok: false,
-        message: "Only pending travel orders can be edited.",
-      };
-    }
+      if (ownedRow.travel_status_id !== PENDING_STATUS_ID) {
+        await rollbackSilently();
+        return {
+          ok: false,
+          message: "Only pending travel orders can be edited.",
+        };
+      }
 
-    const lookupValidation = await validateTravelOrderLookupSelection({
-      travelTypeId: normalizedInput.travelTypeId,
-      transportationId: normalizedInput.transportationId,
-      programId: normalizedInput.programId,
-    });
-    if (!lookupValidation.ok) {
-      return lookupValidation;
-    }
+      const lookupValidation = await validateTravelOrderLookupSelection({
+        travelTypeId: normalizedInput.travelTypeId,
+        transportationId: normalizedInput.transportationId,
+        programId: normalizedInput.programId,
+      });
+      if (!lookupValidation.ok) {
+        await rollbackSilently();
+        return lookupValidation;
+      }
 
-    const approverValidation = await validateApproverSelection({
-      recommendingApproverId,
-      divisionId: profile.divisionId,
-    });
-    if (!approverValidation.ok) {
-      return approverValidation;
-    }
-
-    const [updateResult] = await pool.execute<ResultSetHeader>(
-      `
-        UPDATE travel_orders
-        SET
-          travel_type_id = ?,
-          transportation_id = ?,
-          program_id = ?,
-          travel_order_specDestination = ?,
-          travel_order_specPurpose = ?,
-          travel_order_fundingSource = ?,
-          travel_order_remarks = ?,
-          travel_order_days = ?,
-          travel_order_deptDate = ?,
-          travel_order_returnDate = ?,
-          has_other_staff = ?,
-          travel_status_remarks = ?,
-          recommending_approver_id = ?
-        WHERE travel_order_id = ?
-          AND requester_user_id = ?
-          AND travel_status_id = ?
-      `,
-      [
-        normalizedInput.travelTypeId,
-        normalizedInput.transportationId,
-        normalizedInput.programId,
-        normalizedInput.specificDestination,
-        normalizedInput.specificPurpose,
-        normalizedInput.fundingSource || null,
-        normalizedInput.remarks || null,
-        normalizedInput.travelDays,
-        normalizedInput.departureDate,
-        normalizedInput.returnDate,
-        normalizedInput.hasOtherStaff ? 1 : 0,
-        normalizedInput.travelStatusRemarks || null,
+      const approverValidation = await validateApproverSelection({
         recommendingApproverId,
+        divisionId: profile.divisionId,
+      });
+      if (!approverValidation.ok) {
+        await rollbackSilently();
+        return approverValidation;
+      }
+
+      const [updateResult] = await connection.execute<ResultSetHeader>(
+        `
+          UPDATE travel_orders
+          SET
+            travel_type_id = ?,
+            transportation_id = ?,
+            program_id = ?,
+            travel_order_specDestination = ?,
+            travel_order_specPurpose = ?,
+            travel_order_fundingSource = ?,
+            travel_order_remarks = ?,
+            travel_order_days = ?,
+            travel_order_deptDate = ?,
+            travel_order_returnDate = ?,
+            has_other_staff = ?,
+            travel_status_remarks = ?,
+            recommending_approver_id = ?
+          WHERE travel_order_id = ?
+            AND requester_user_id = ?
+            AND travel_status_id = ?
+        `,
+        [
+          normalizedInput.travelTypeId,
+          normalizedInput.transportationId,
+          normalizedInput.programId,
+          normalizedInput.specificDestination,
+          normalizedInput.specificPurpose,
+          normalizedInput.fundingSource || null,
+          normalizedInput.remarks || null,
+          normalizedInput.travelDays,
+          normalizedInput.departureDate,
+          normalizedInput.returnDate,
+          normalizedInput.hasOtherStaff ? 1 : 0,
+          normalizedInput.travelStatusRemarks || null,
+          recommendingApproverId,
+          travelOrderId,
+          requesterUserId,
+          PENDING_STATUS_ID,
+        ],
+      );
+
+      if (updateResult.affectedRows !== 1) {
+        await rollbackSilently();
+        return {
+          ok: false,
+          message: "Travel order is no longer editable.",
+        };
+      }
+
+      await replaceTravelOrderTripsInTransaction(
+        connection,
         travelOrderId,
-        requesterUserId,
-        PENDING_STATUS_ID,
-      ],
-    );
+        normalizedInput.trips,
+      );
 
-    if (updateResult.affectedRows !== 1) {
+      await connection.commit();
+
+      queueTravelOrderRealtimeUpdate({
+        travelOrderId,
+        newStatus: "PENDING",
+        relatedUserIds: [ownedRow.requester_user_id, recommendingApproverId],
+      });
+
       return {
-        ok: false,
-        message: "Travel order is no longer editable.",
+        ok: true,
+        travelOrderId,
+        orderNo: ownedRow.travel_order_no,
       };
+    } catch (error) {
+      await rollbackSilently();
+      if (isMissingTableError(error)) {
+        return {
+          ok: false,
+          message:
+            "Travel-order tables are not available yet. Run migrations and try again.",
+        };
+      }
+      throw error;
+    } finally {
+      connection.release();
     }
-
-    return {
-      ok: true,
-      travelOrderId,
-      orderNo: ownedRow.travel_order_no,
-    };
   } catch (error) {
     if (isMissingTableError(error)) {
       return {
@@ -1554,7 +2613,9 @@ export async function cancelRegularTravelOrder(
         SELECT
           travel_order_id,
           travel_order_no,
-          travel_status_id
+          travel_status_id,
+          requester_user_id,
+          recommending_approver_id
         FROM travel_orders
         WHERE travel_order_id = ?
           AND requester_user_id = ?
@@ -1603,6 +2664,15 @@ export async function cancelRegularTravelOrder(
         message: "Travel order is no longer cancellable.",
       };
     }
+
+    queueTravelOrderRealtimeUpdate({
+      travelOrderId,
+      newStatus: "CANCELLED",
+      relatedUserIds: [
+        ownedRow.requester_user_id,
+        ownedRow.recommending_approver_id,
+      ],
+    });
 
     return {
       ok: true,
@@ -1729,19 +2799,23 @@ export async function reviewTravelOrderStep1(
       queueTravelOrderNotification({
         userId: ownedRow.requester_user_id,
         travelOrderId: input.travelOrderId,
-        newStatus: "REJECTED",
         title: `${ownedRow.travel_order_no} was rejected`,
         message: normalizedRemarks
           ? `Your travel order was rejected at step 1. Reason: ${normalizedRemarks}`
           : "Your travel order was rejected at step 1.",
         notificationType: "REJECTION",
       });
-    } else {
-      pushTravelOrderStatusChanged(ownedRow.requester_user_id, {
-        travelOrderId: input.travelOrderId,
-        newStatus: "STEP1_APPROVED",
-      });
     }
+
+    queueTravelOrderRealtimeUpdate({
+      travelOrderId: input.travelOrderId,
+      newStatus: nextStatus.statusLabel,
+      relatedUserIds: [
+        ownedRow.requester_user_id,
+        ownedRow.recommending_approver_id,
+        approverUserId,
+      ],
+    });
 
     return {
       ok: true,
@@ -1875,10 +2949,190 @@ export async function getAllTravelOrdersForAdmin(
       [safeLimit],
     );
 
-    return rows.map(mapRequesterTravelOrderRow);
+    return mapRequesterTravelOrderRowsWithTrips(rows);
   } catch (error) {
     if (isMissingTableError(error)) {
       return [];
+    }
+    throw error;
+  }
+}
+
+export type AdminTravelOrderFilter = TravelOrderFilter;
+
+export type AdminTravelOrderPaginatedResult = Readonly<{
+  items: readonly AdminTravelOrderItem[];
+  pagination: TravelOrderPagination;
+}>;
+
+function buildAdminTravelOrdersQuery(
+  filter: AdminTravelOrderFilter,
+  includeCount = false,
+): { sql: string; params: (number | string)[] } {
+  const baseQuery = `
+    FROM travel_orders t
+    INNER JOIN users u ON u.user_id = t.requester_user_id
+    LEFT JOIN divisions d ON d.division_id = t.division_id
+    LEFT JOIN users rec ON rec.user_id = t.recommending_approver_id
+    LEFT JOIN users fin ON fin.user_id = t.approved_by_user_id
+    LEFT JOIN (
+      SELECT
+        a.travel_order_id,
+        a.action,
+        a.remarks,
+        a.action_at,
+        CONCAT(u2.user_firstName, ' ', u2.user_lastName) AS approver_name
+      FROM travel_order_approvals a
+      INNER JOIN (
+        SELECT travel_order_id, MAX(approval_id) AS latest_approval_id
+        FROM travel_order_approvals
+        WHERE step_no = 1
+        GROUP BY travel_order_id
+      ) latest_step1 ON latest_step1.latest_approval_id = a.approval_id
+      INNER JOIN users u2 ON u2.user_id = a.approver_user_id
+    ) step1 ON step1.travel_order_id = t.travel_order_id
+    LEFT JOIN (
+      SELECT
+        a.travel_order_id,
+        a.action,
+        a.remarks,
+        a.action_at,
+        CONCAT(u3.user_firstName, ' ', u3.user_lastName) AS approver_name
+      FROM travel_order_approvals a
+      INNER JOIN (
+        SELECT travel_order_id, MAX(approval_id) AS latest_approval_id
+        FROM travel_order_approvals
+        WHERE step_no = 2
+        GROUP BY travel_order_id
+      ) latest_step2 ON latest_step2.latest_approval_id = a.approval_id
+      INNER JOIN users u3 ON u3.user_id = a.approver_user_id
+    ) step2 ON step2.travel_order_id = t.travel_order_id
+    INNER JOIN travel_statuses s ON s.travel_status_id = t.travel_status_id
+    WHERE 1=1
+  `;
+
+  const params: (number | string)[] = [];
+  let whereClause = "";
+
+  if (filter.status && filter.status !== "all") {
+    whereClause += ` AND s.travel_status_name = ?`;
+    params.push(filter.status.toUpperCase());
+  }
+
+  if (filter.search && filter.search.trim()) {
+    const searchTerm = `%${filter.search.trim()}%`;
+    whereClause += ` AND (
+      t.travel_order_no LIKE ? OR
+      CONCAT(u.user_firstName, ' ', u.user_lastName) LIKE ? OR
+      t.travel_order_specDestination LIKE ? OR
+      t.travel_order_specPurpose LIKE ? OR
+      COALESCE(d.division_name, '') LIKE ?
+    )`;
+    params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+  }
+
+  let orderBy = "ORDER BY t.created_at DESC";
+
+  if (filter.sortBy && filter.sortDir) {
+    const sortColumnMap: Record<TravelOrderSortColumn, string> = {
+      orderNo: "t.travel_order_no",
+      orderDate: "t.travel_order_date",
+      requestedBy: "CONCAT(u.user_firstName, ' ', u.user_lastName)",
+      destination: "t.travel_order_specDestination",
+      purpose: "t.travel_order_specPurpose",
+      departureDate: "t.travel_order_deptDate",
+      status: "s.travel_status_name",
+    };
+    const col = sortColumnMap[filter.sortBy] || "t.created_at";
+    orderBy = `ORDER BY ${col} ${filter.sortDir.toUpperCase()}`;
+  }
+
+  if (includeCount) {
+    const countSql = `SELECT COUNT(*) as total ${baseQuery} ${whereClause}`;
+    return { sql: countSql, params };
+  }
+
+  const safePage = Math.max(1, Math.trunc(filter.page || 1));
+  const safeLimit = Math.min(100, Math.max(1, Math.trunc(filter.limit || 10)));
+  const offset = (safePage - 1) * safeLimit;
+
+  const selectColumns = `
+    t.travel_order_id,
+    t.travel_order_no,
+    DATE_FORMAT(t.travel_order_date, '%b %e, %Y') AS travel_order_date_label,
+    DATE_FORMAT(t.travel_order_date, '%Y-%m-%d') AS travel_order_date_iso,
+    u.user_firstName AS requester_first_name,
+    u.user_lastName AS requester_last_name,
+    d.division_name,
+    t.travel_order_specDestination,
+    t.travel_order_specPurpose,
+    DATE_FORMAT(t.travel_order_deptDate, '%b %e, %Y') AS travel_order_dept_date_label,
+    DATE_FORMAT(t.travel_order_deptDate, '%Y-%m-%d') AS travel_order_dept_date_iso,
+    DATE_FORMAT(t.travel_order_returnDate, '%b %e, %Y') AS travel_order_return_date_label,
+    DATE_FORMAT(t.travel_order_returnDate, '%Y-%m-%d') AS travel_order_return_date_iso,
+    t.travel_type_id,
+    t.transportation_id,
+    t.program_id,
+    t.recommending_approver_id,
+    t.travel_order_fundingSource,
+    t.travel_order_remarks,
+    t.travel_order_days,
+    t.has_other_staff,
+    t.travel_status_remarks,
+    CONCAT(rec.user_firstName, ' ', rec.user_lastName) AS recommending_approver_name,
+    CONCAT(fin.user_firstName, ' ', fin.user_lastName) AS approved_by_name,
+    step1.action AS step1_action,
+    step1.approver_name AS step1_approver_name,
+    DATE_FORMAT(step1.action_at, '%b %e, %Y %h:%i %p') AS step1_action_at_label,
+    step1.remarks AS step1_remarks,
+    step2.action AS step2_action,
+    step2.approver_name AS step2_approver_name,
+    DATE_FORMAT(step2.action_at, '%b %e, %Y %h:%i %p') AS step2_action_at_label,
+    step2.remarks AS step2_remarks,
+    s.travel_status_name,
+    DATE_FORMAT(t.created_at, '%b %e, %Y') AS created_at_label
+  `;
+
+  const dataSql = `SELECT ${selectColumns} ${baseQuery} ${whereClause} ${orderBy} LIMIT ? OFFSET ?`;
+  const dataParams = [...params, safeLimit, offset];
+
+  return { sql: dataSql, params: dataParams };
+}
+
+export async function getAllTravelOrdersForAdminPaginated(
+  filter: AdminTravelOrderFilter,
+): Promise<AdminTravelOrderPaginatedResult> {
+  const pool = getDbPool();
+  const safePage = Math.max(1, Math.trunc(filter.page || 1));
+  const safeLimit = Math.min(100, Math.max(1, Math.trunc(filter.limit || 10)));
+
+  try {
+    const countQuery = buildAdminTravelOrdersQuery(filter, true);
+    const [countResult] = await pool.execute<RowDataPacket[]>(countQuery.sql, countQuery.params);
+    const total = (countResult[0]?.total as number) || 0;
+    const totalPages = Math.ceil(total / safeLimit);
+
+    const dataQuery = buildAdminTravelOrdersQuery(filter, false);
+    const [rows] = await pool.execute<RequesterTravelOrderListRow[]>(
+      dataQuery.sql,
+      dataQuery.params,
+    );
+
+    return {
+      items: await mapRequesterTravelOrderRowsWithTrips(rows),
+      pagination: {
+        page: safePage,
+        limit: safeLimit,
+        total,
+        totalPages,
+      },
+    };
+  } catch (error) {
+    if (isMissingTableError(error)) {
+      return {
+        items: [],
+        pagination: { page: safePage, limit: safeLimit, total: 0, totalPages: 0 },
+      };
     }
     throw error;
   }
@@ -2032,7 +3286,6 @@ export async function reviewTravelOrderStep2(
     queueTravelOrderNotification({
       userId: ownedRow.requester_user_id,
       travelOrderId: input.travelOrderId,
-      newStatus: statusLabelByAction[input.action],
       title:
         input.action === "APPROVED"
           ? `${ownedRow.travel_order_no} was approved`
@@ -2041,6 +3294,16 @@ export async function reviewTravelOrderStep2(
             : `${ownedRow.travel_order_no} was rejected`,
       message: messageByAction[input.action],
       notificationType: notificationTypeByAction[input.action],
+    });
+
+    queueTravelOrderRealtimeUpdate({
+      travelOrderId: input.travelOrderId,
+      newStatus: statusLabelByAction[input.action],
+      relatedUserIds: [
+        ownedRow.requester_user_id,
+        ownedRow.recommending_approver_id,
+        adminUserId,
+      ],
     });
 
     return {

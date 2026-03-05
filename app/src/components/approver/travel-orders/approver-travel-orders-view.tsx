@@ -1,10 +1,14 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import type { ApproverTravelOrderItem } from "@/src/server/travel-orders/service";
+import type {
+  ApproverTravelOrderItem,
+  TravelOrderPagination,
+  TravelOrderSortColumn,
+  TravelOrderSortDirection,
+} from "@/src/server/travel-orders/service";
 import { TableSkeleton } from "@/src/components/ui/skeleton";
 
-// Lazy load the heavy table component
 const ApproverTravelOrdersTable = dynamic(
   () => import("@/src/components/approver/travel-orders/approver-travel-orders-table").then((mod) => ({ default: mod.ApproverTravelOrdersTable })),
   {
@@ -13,8 +17,19 @@ const ApproverTravelOrdersTable = dynamic(
   }
 );
 
+type CurrentFilter = Readonly<{
+  search?: string;
+  status?: string;
+  sortBy?: TravelOrderSortColumn;
+  sortDir?: TravelOrderSortDirection;
+  page?: number;
+  limit?: number;
+}>;
+
 type ApproverTravelOrdersViewProps = Readonly<{
   rows: readonly ApproverTravelOrderItem[];
+  pagination?: TravelOrderPagination;
+  currentFilter?: CurrentFilter;
   onReview: (formData: FormData) => Promise<void>;
   initialOrderId?: number;
   feedback?: Readonly<{
@@ -25,6 +40,8 @@ type ApproverTravelOrdersViewProps = Readonly<{
 
 export function ApproverTravelOrdersView({
   rows,
+  pagination,
+  currentFilter,
   onReview,
   initialOrderId,
   feedback,
@@ -55,6 +72,8 @@ export function ApproverTravelOrdersView({
         <div className="mt-4">
           <ApproverTravelOrdersTable
             rows={rows}
+            pagination={pagination}
+            currentFilter={currentFilter}
             onReview={onReview}
             initialOrderId={initialOrderId}
           />

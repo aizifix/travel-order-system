@@ -125,7 +125,50 @@ function formatDateByOffset(isoDate: string, offsetDays: number): string {
   return formatDateForTemplate(shiftedIso);
 }
 
+function withTripLabel(value: string, tripOrder: number): string {
+  const normalizedValue = normalizeText(value);
+  const label = `Trip ${tripOrder}`;
+  return normalizedValue ? `${label}: ${normalizedValue}` : label;
+}
+
 function buildTrips(order: PrintableTravelOrderData): readonly Trip[] {
+  if (order.trips.length > 0) {
+    const orderedTrips = [...order.trips].sort((leftTrip, rightTrip) => {
+      if (leftTrip.tripOrder !== rightTrip.tripOrder) {
+        return leftTrip.tripOrder - rightTrip.tripOrder;
+      }
+
+      if (leftTrip.departureDateIso !== rightTrip.departureDateIso) {
+        return leftTrip.departureDateIso.localeCompare(rightTrip.departureDateIso);
+      }
+
+      return leftTrip.id - rightTrip.id;
+    });
+    const hasMultipleTrips = orderedTrips.length > 1;
+    const fallbackDepartureDate = formatDateForTemplate(order.departureDateIso);
+    const fallbackReturnDate = formatDateForTemplate(order.returnDateIso);
+
+    return orderedTrips.map((trip, index) => {
+      const normalizedTripOrder = Number.isFinite(trip.tripOrder)
+        ? Math.max(1, Math.trunc(trip.tripOrder))
+        : index + 1;
+      const destination = normalizeText(trip.specificDestination);
+      const purpose = normalizeText(trip.specificPurpose);
+      const departureDate =
+        formatDateForTemplate(trip.departureDateIso) || fallbackDepartureDate;
+      const returnDate = formatDateForTemplate(trip.returnDateIso) || fallbackReturnDate;
+
+      return {
+        departureDate,
+        returnDate,
+        specificDestination: hasMultipleTrips
+          ? withTripLabel(destination, normalizedTripOrder)
+          : destination,
+        specificPurpose: purpose,
+      };
+    });
+  }
+
   const fallbackDestination = normalizeText(order.destination);
   const fallbackPurpose = normalizeText(order.purpose);
   const destinationLines = parseMultilineLines(order.destination);

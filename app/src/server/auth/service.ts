@@ -174,6 +174,7 @@ export async function getUserWithDivision(userId: number): Promise<{
   email: string;
   role: UserRole;
   isActive: boolean;
+  divisionId: number | null;
   division: string | null;
   position: string | null;
 } | null> {
@@ -211,6 +212,7 @@ export async function getUserWithDivision(userId: number): Promise<{
     email: row.user_email,
     role: row.user_role,
     isActive: row.user_isActive === 1,
+    divisionId: row.division_id,
     division: row.division_name,
     position: row.position_name,
   };

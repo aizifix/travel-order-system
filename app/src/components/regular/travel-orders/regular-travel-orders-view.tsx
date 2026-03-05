@@ -6,7 +6,10 @@ import type { ReactNode } from "react";
 import type {
   RequesterTravelOrderItem,
   TravelOrderCreationLookups,
+  TravelOrderPagination,
   TravelOrderRequesterProfile,
+  TravelOrderSortColumn,
+  TravelOrderSortDirection,
 } from "@/src/server/travel-orders/service";
 import { TableSkeleton } from "@/src/components/ui/skeleton";
 
@@ -19,10 +22,21 @@ const RegularTravelOrdersTable = dynamic(
   }
 );
 
+type CurrentFilter = Readonly<{
+  search?: string;
+  status?: string;
+  sortBy?: TravelOrderSortColumn;
+  sortDir?: TravelOrderSortDirection;
+  page?: number;
+  limit?: number;
+}>;
+
 type RegularTravelOrdersViewProps = Readonly<{
   profile: TravelOrderRequesterProfile | null;
   lookups: TravelOrderCreationLookups;
   rows: readonly RequesterTravelOrderItem[];
+  pagination?: TravelOrderPagination;
+  currentFilter?: CurrentFilter;
   onUpdate: (formData: FormData) => Promise<void>;
   onCancel: (formData: FormData) => Promise<void>;
   feedback?: Readonly<{
@@ -35,6 +49,8 @@ export function RegularTravelOrdersView({
   profile,
   lookups,
   rows,
+  pagination,
+  currentFilter,
   onUpdate,
   onCancel,
   feedback,
@@ -84,6 +100,8 @@ export function RegularTravelOrdersView({
           <RegularTravelOrdersTable
             rows={rows}
             lookups={lookups}
+            pagination={pagination}
+            currentFilter={currentFilter}
             onUpdate={onUpdate}
             onCancel={onCancel}
           />
