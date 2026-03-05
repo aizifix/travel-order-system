@@ -36,21 +36,116 @@ type DashboardSnapshot = Readonly<{
   monthlySeries: readonly Readonly<{ label: string; value: number }>[];
   topTravelers: readonly Readonly<{ label: string; value: number }>[];
   topDestinations: readonly Readonly<{ label: string; value: number }>[];
+  approvalTurnaround: readonly Readonly<{
+    label: string;
+    averageDays: number;
+    sampleCount: number;
+  }>[];
   recentOrders: readonly AdminTravelOrderItem[];
   distribution: readonly Readonly<{ label: string; value: number; color: string }>[];
 }>;
 
+const ONE_DAY_MS = 86_400_000;
+const MONTH_INDEX_BY_LABEL: Readonly<Record<string, number>> = {
+  jan: 0,
+  feb: 1,
+  mar: 2,
+  apr: 3,
+  may: 4,
+  jun: 5,
+  jul: 6,
+  aug: 7,
+  sep: 8,
+  oct: 9,
+  nov: 10,
+  dec: 11,
+};
+
+function parseLabeledDate(rawValue: string | null | undefined): Date | null {
+  if (!rawValue) {
+    return null;
+  }
+
+  const trimmed = rawValue.trim();
+  if (!trimmed || trimmed === "-") {
+    return null;
+  }
+
+  const nativeDate = new Date(trimmed);
+  if (!Number.isNaN(nativeDate.getTime())) {
+    return nativeDate;
+  }
+
+  const match = trimmed.match(
+    /^([A-Za-z]{3})\s+(\d{1,2}),\s+(\d{4})(?:\s+(\d{1,2}):(\d{2})\s*(AM|PM))?$/i,
+  );
+  if (!match) {
+    return null;
+  }
+
+  const [, monthToken, dayToken, yearToken, hourToken, minuteToken, meridiemToken] = match;
+  const monthIndex = MONTH_INDEX_BY_LABEL[monthToken.toLowerCase()];
+  if (typeof monthIndex !== "number") {
+    return null;
+  }
+
+  const day = Number(dayToken);
+  const year = Number(yearToken);
+  if (!Number.isInteger(day) || !Number.isInteger(year)) {
+    return null;
+  }
+
+  let hours = 0;
+  let minutes = 0;
+
+  if (hourToken && minuteToken && meridiemToken) {
+    const parsedHour = Number(hourToken);
+    const parsedMinute = Number(minuteToken);
+    if (!Number.isInteger(parsedHour) || !Number.isInteger(parsedMinute)) {
+      return null;
+    }
+
+    const normalizedHour = parsedHour % 12;
+    const upperMeridiem = meridiemToken.toUpperCase();
+    hours = upperMeridiem === "PM" ? normalizedHour + 12 : normalizedHour;
+    minutes = parsedMinute;
+  }
+
+  const parsedDate = new Date(year, monthIndex, day, hours, minutes);
+  if (Number.isNaN(parsedDate.getTime())) {
+    return null;
+  }
+
+  return parsedDate;
+}
+
 function parseOrderDate(order: AdminTravelOrderItem): Date | null {
-  if (order.orderDateIso) {
-    const byIso = new Date(order.orderDateIso);
+  if (order.orderDateIso?.trim()) {
+    const byIso = new Date(`${order.orderDateIso}T00:00:00Z`);
     if (!Number.isNaN(byIso.getTime())) {
       return byIso;
     }
   }
 
-  const byLabel = new Date(order.orderDateLabel);
-  if (!Number.isNaN(byLabel.getTime())) {
-    return byLabel;
+  if (order.departureDateIso?.trim()) {
+    const byDepartureIso = new Date(`${order.departureDateIso}T00:00:00Z`);
+    if (!Number.isNaN(byDepartureIso.getTime())) {
+      return byDepartureIso;
+    }
+  }
+
+  const labeledCandidates = [
+    order.orderDateLabel,
+    order.departureDateLabel,
+    order.returnDateLabel,
+    order.createdAtLabel,
+  ];
+
+  for (const candidate of labeledCandidates) {
+    const parsed = parseLabeledDate(candidate);
+    if (parsed) {
+      return parsed;
+    }
   }
 
   return null;
@@ -112,6 +207,66 @@ function buildMonthlySeries(
   }));
 }
 
+function normalizeDestinationLabel(rawValue: string): string {
+  const firstLine = rawValue
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+
+  return firstLine ?? "Unknown destination";
+}
+
+function buildApprovalTurnaroundSeries(
+  orders: readonly AdminTravelOrderItem[],
+): readonly Readonly<{
+  label: string;
+  averageDays: number;
+  sampleCount: number;
+}>[] {
+  const statsByDestination = new Map<string, { totalDays: number; sampleCount: number }>();
+
+  for (const order of orders) {
+    const startDate = parseOrderDate(order);
+    const endDate =
+      parseLabeledDate(order.step2.actionAtLabel) ??
+      parseLabeledDate(order.step1.actionAtLabel);
+
+    if (!startDate || !endDate) {
+      continue;
+    }
+
+    const dayDiff = Math.ceil((endDate.getTime() - startDate.getTime()) / ONE_DAY_MS);
+    if (!Number.isFinite(dayDiff) || dayDiff < 0) {
+      continue;
+    }
+
+    const destinationLabel = normalizeDestinationLabel(order.destination);
+    const current = statsByDestination.get(destinationLabel) ?? {
+      totalDays: 0,
+      sampleCount: 0,
+    };
+
+    statsByDestination.set(destinationLabel, {
+      totalDays: current.totalDays + Math.max(dayDiff, 1),
+      sampleCount: current.sampleCount + 1,
+    });
+  }
+
+  return [...statsByDestination.entries()]
+    .map(([label, stats]) => ({
+      label,
+      averageDays: Number((stats.totalDays / stats.sampleCount).toFixed(1)),
+      sampleCount: stats.sampleCount,
+    }))
+    .sort(
+      (left, right) =>
+        right.averageDays - left.averageDays ||
+        right.sampleCount - left.sampleCount ||
+        left.label.localeCompare(right.label),
+    )
+    .slice(0, 6);
+}
+
 function buildSnapshot(orders: readonly AdminTravelOrderItem[]): DashboardSnapshot {
   let pendingOrders = 0;
   let approvedOrders = 0;
@@ -142,6 +297,7 @@ function buildSnapshot(orders: readonly AdminTravelOrderItem[]): DashboardSnapsh
   const monthlySeries = buildMonthlySeries(orders, 10);
   const topTravelers = topFromMap(toKeyedCounts(orders, (order) => order.requestedBy), 5);
   const topDestinations = topFromMap(toKeyedCounts(orders, (order) => order.destination), 5);
+  const approvalTurnaround = buildApprovalTurnaroundSeries(orders);
 
   const distribution = [
     { label: "Approved", value: approvedOrders, color: "#85d9a9" },
@@ -159,6 +315,7 @@ function buildSnapshot(orders: readonly AdminTravelOrderItem[]): DashboardSnapsh
     monthlySeries,
     topTravelers,
     topDestinations,
+    approvalTurnaround,
     recentOrders: orders.slice(0, 6),
     distribution,
   };
@@ -368,7 +525,7 @@ export default async function AdminDashboardPage() {
             year={year}
           />
 
-          <article className="rounded-2xl border border-[#dfe1ed] bg-white p-4 xl:col-span-4">
+          <article className="rounded-2xl border border-[#dfe1ed] bg-white p-4 xl:col-span-3">
             <h3 className="text-[14px] font-semibold tracking-tight text-[#2f3339]">
               Status Distribution
             </h3>
@@ -376,8 +533,20 @@ export default async function AdminDashboardPage() {
               +{approvedShare}% approved
             </p>
 
-            <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <ul className="space-y-2.5 text-sm text-[#4a5266]">
+            <div className="mt-4 flex flex-col items-center">
+              <div className="relative h-44 w-44 shrink-0">
+                <div
+                  className="h-full w-full rounded-full"
+                  style={donutGradient(snapshot.distribution)}
+                  aria-hidden="true"
+                />
+                <div className="absolute inset-[22%] flex flex-col items-center justify-center rounded-full bg-white">
+                  <span className="text-3xl font-bold text-[#2f3339]">{approvedShare}%</span>
+                  <span className="text-xs font-medium text-[#7d8598]">Approved</span>
+                </div>
+              </div>
+
+              <ul className="mt-4 w-full space-y-2.5 text-sm text-[#4a5266]">
                 {snapshot.distribution.map((item) => (
                   <li key={item.label} className="flex items-center gap-2">
                     <span
@@ -390,18 +559,6 @@ export default async function AdminDashboardPage() {
                   </li>
                 ))}
               </ul>
-
-              <div className="relative mx-auto h-44 w-44 shrink-0">
-                <div
-                  className="h-full w-full rounded-full"
-                  style={donutGradient(snapshot.distribution)}
-                  aria-hidden="true"
-                />
-                <div className="absolute inset-[22%] flex flex-col items-center justify-center rounded-full bg-white">
-                  <span className="text-3xl font-bold text-[#2f3339]">{approvedShare}%</span>
-                  <span className="text-xs font-medium text-[#7d8598]">Approved</span>
-                </div>
-              </div>
             </div>
           </article>
 
@@ -409,7 +566,7 @@ export default async function AdminDashboardPage() {
         </section>
 
         <section className="grid gap-4 xl:grid-cols-12">
-          <div className="space-y-4 xl:col-span-4">
+          <div className="space-y-4 xl:col-span-3">
             <article className="rounded-2xl border border-[#dfe1ed] bg-white p-4">
               <div className="flex items-center justify-between gap-3">
                 <h3 className="text-[14px] font-semibold tracking-tight text-[#2f3339]">
@@ -489,110 +646,108 @@ export default async function AdminDashboardPage() {
             </article>
           </div>
 
-          <div className="space-y-4 xl:col-span-8">
-            <article className="rounded-2xl border border-[#dfe1ed] bg-white p-4">
-              <div className="flex items-center justify-between gap-3">
+          <article className="rounded-2xl border border-[#dfe1ed] bg-white p-4 xl:col-span-6">
+            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
                 <h3 className="text-[14px] font-semibold tracking-tight text-[#2f3339]">
-                  Top Travelers
+                  My Recent Travel Orders
                 </h3>
-
-                <div className="flex items-center gap-2">
-                  <span className="rounded-lg border border-[#dfe1ed] bg-[#f9fafc] px-2.5 py-1 text-xs font-semibold text-[#5d6780]">
-                    Approval
-                  </span>
-                  <Link
-                    href="/admin/travel-orders"
-                    className="text-xs font-semibold text-[#5d6780] transition hover:text-[#3B9F41]"
-                  >
-                    View All
-                  </Link>
-                </div>
+                <p className="text-xs text-[#7b8398]">
+                  Latest submissions from all requesters.
+                </p>
               </div>
 
-              <div className="mt-3 divide-y divide-[#edf0f6] text-sm">
-                {topTravelers.map((item, index) => (
-                  <div
-                    key={`traveler-${item.label}`}
-                    className="flex items-center justify-between py-2.5 text-[#4a5266]"
-                  >
-                    <span className="truncate pr-4 font-medium">
-                      {index + 1}. {item.label}
-                    </span>
-                    <span className="text-lg font-semibold text-[#2f3339]">{item.value}</span>
-                  </div>
-                ))}
-              </div>
-            </article>
+              <Link
+                href="/admin/travel-orders"
+                className="inline-flex items-center rounded-lg border border-[#dfe1ed] bg-white px-4 py-2 text-sm font-semibold text-[#5d6780] transition hover:bg-[#f3f5fa]"
+              >
+                Open Travel Orders
+              </Link>
+            </div>
 
-            <article className="rounded-2xl border border-[#dfe1ed] bg-white p-4">
-              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h3 className="text-[14px] font-semibold tracking-tight text-[#2f3339]">
-                    My Recent Travel Orders
-                  </h3>
-                  <p className="text-xs text-[#7b8398]">
-                    Latest submissions from all requesters.
-                  </p>
-                </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-[760px] w-full border-collapse text-left">
+                <thead className="bg-[#f3f5fa] text-[#5d6780]">
+                  <tr className="border-y border-[#dfe1ed]">
+                    <TableHeadCell>TO No.</TableHeadCell>
+                    <TableHeadCell>Destination</TableHeadCell>
+                    <TableHeadCell>Travel Dates</TableHeadCell>
+                    <TableHeadCell>Status</TableHeadCell>
+                  </tr>
+                </thead>
 
+                <tbody className="text-sm text-[#4a5266]">
+                  {snapshot.recentOrders.length > 0 ? (
+                    snapshot.recentOrders.map((row) => (
+                      <tr key={row.id} className="border-b border-[#dfe1ed] last:border-b-0">
+                        <TableBodyCell className="font-semibold">{row.orderNo}</TableBodyCell>
+                        <TableBodyCell>
+                          <span className="block max-w-[220px] truncate" title={row.destination}>
+                            {row.destination}
+                          </span>
+                        </TableBodyCell>
+                        <TableBodyCell className="whitespace-nowrap">
+                          {row.departureDateLabel} - {row.returnDateLabel}
+                        </TableBodyCell>
+                        <TableBodyCell>
+                          <span
+                            className={`inline-flex min-w-24 items-center justify-center rounded-full px-3 py-1 text-xs font-semibold ${getStatusPillClasses(
+                              row.status,
+                            )}`}
+                          >
+                            {formatStatusLabel(row.status)}
+                          </span>
+                        </TableBodyCell>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td
+                        colSpan={4}
+                        className="px-5 py-8 text-center text-sm text-[#7d8598]"
+                      >
+                        No travel orders available yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </article>
+
+          <article className="rounded-2xl border border-[#dfe1ed] bg-white p-4 xl:col-span-3">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-[14px] font-semibold tracking-tight text-[#2f3339]">
+                Top Travelers
+              </h3>
+
+              <div className="flex items-center gap-2">
+                <span className="rounded-lg border border-[#dfe1ed] bg-[#f9fafc] px-2.5 py-1 text-xs font-semibold text-[#5d6780]">
+                  Approval
+                </span>
                 <Link
                   href="/admin/travel-orders"
-                  className="inline-flex items-center rounded-lg border border-[#dfe1ed] bg-white px-4 py-2 text-sm font-semibold text-[#5d6780] transition hover:bg-[#f3f5fa]"
+                  className="text-xs font-semibold text-[#5d6780] transition hover:text-[#3B9F41]"
                 >
-                  Open Travel Orders
+                  View All
                 </Link>
               </div>
+            </div>
 
-              <div className="overflow-x-auto">
-                <table className="min-w-[760px] w-full border-collapse text-left">
-                  <thead className="bg-[#f3f5fa] text-[#5d6780]">
-                    <tr className="border-y border-[#dfe1ed]">
-                      <TableHeadCell>TO No.</TableHeadCell>
-                      <TableHeadCell>Destination</TableHeadCell>
-                      <TableHeadCell>Travel Dates</TableHeadCell>
-                      <TableHeadCell>Status</TableHeadCell>
-                    </tr>
-                  </thead>
-
-                  <tbody className="text-sm text-[#4a5266]">
-                    {snapshot.recentOrders.length > 0 ? (
-                      snapshot.recentOrders.map((row) => (
-                        <tr key={row.id} className="border-b border-[#dfe1ed] last:border-b-0">
-                          <TableBodyCell className="font-semibold">{row.orderNo}</TableBodyCell>
-                          <TableBodyCell>
-                            <span className="block max-w-[220px] truncate" title={row.destination}>
-                              {row.destination}
-                            </span>
-                          </TableBodyCell>
-                          <TableBodyCell className="whitespace-nowrap">
-                            {row.departureDateLabel} - {row.returnDateLabel}
-                          </TableBodyCell>
-                          <TableBodyCell>
-                            <span
-                              className={`inline-flex min-w-24 items-center justify-center rounded-full px-3 py-1 text-xs font-semibold ${getStatusPillClasses(
-                                row.status,
-                              )}`}
-                            >
-                              {formatStatusLabel(row.status)}
-                            </span>
-                          </TableBodyCell>
-                        </tr>
-                      ))
-                    ) : (
-                      <tr>
-                        <td
-                          colSpan={4}
-                          className="px-5 py-8 text-center text-sm text-[#7d8598]"
-                        >
-                          No travel orders available yet.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </article>
-          </div>
+            <div className="mt-3 divide-y divide-[#edf0f6] text-sm">
+              {topTravelers.map((item, index) => (
+                <div
+                  key={`traveler-${item.label}`}
+                  className="flex items-center justify-between py-2.5 text-[#4a5266]"
+                >
+                  <span className="truncate pr-4 font-medium">
+                    {index + 1}. {item.label}
+                  </span>
+                  <span className="text-lg font-semibold text-[#2f3339]">{item.value}</span>
+                </div>
+              ))}
+            </div>
+          </article>
         </section>
       </div>
     </AdminShell>

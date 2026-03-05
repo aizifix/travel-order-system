@@ -1,13 +1,18 @@
+"use client";
+
 import Image from "next/image";
 import Link from "next/link";
+import { useState } from "react";
 import {
   BookOpen,
   FileText,
   LayoutGrid,
   List,
   LogOut,
+  Menu,
   Settings,
   Users,
+  X,
 } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -63,12 +68,74 @@ export function RoleShell({
   brandTitle = "Travel Order",
   brandSubtitle = "DA - Region 10",
 }: RoleShellProps) {
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
   return (
     <div className="min-h-dvh bg-[#f4f5f8] text-[#2f3339]">
+      {/* Mobile Header with Hamburger Menu */}
+      <header className="lg:hidden flex items-center justify-between bg-[#3B9F41] px-4 py-3 text-white">
+        <button
+          onClick={() => setSidebarOpen(true)}
+          className="flex items-center justify-center p-2 rounded-lg hover:bg-white/10 transition"
+          aria-label="Open menu"
+        >
+          <Menu className="h-6 w-6" />
+        </button>
+        <div className="flex items-center gap-2">
+          <span className="font-semibold">{brandTitle}</span>
+        </div>
+        <div className="flex items-center">
+          {headerAction}
+        </div>
+      </header>
+
+      {/* Mobile Overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       <div className="flex flex-col lg:h-dvh lg:flex-row lg:overflow-hidden">
-        <aside className="z-10 h-auto w-full shrink-0 bg-[#3B9F41] text-white lg:sticky lg:top-0 lg:h-dvh lg:w-[250px]">
+        {/* Sidebar - Mobile: Drawer, Desktop: Sticky */}
+        <aside
+          className={`z-50 h-auto w-full shrink-0 bg-[#3B9F41] text-white lg:sticky lg:top-0 lg:h-dvh lg:w-[250px] lg:block ${
+            sidebarOpen ? "fixed inset-y-0 left-0 animate-slide-in" : "hidden"
+          }`}
+        >
           <div className="flex h-full flex-col overflow-y-auto px-4 py-4">
-            <div className="flex items-center gap-1 px-1">
+            {/* Mobile Close Button */}
+            <div className="flex items-center justify-between lg:hidden mb-4">
+              <div className="flex items-center gap-1 px-1">
+                <Image
+                  src="/da_logo.png"
+                  alt="Travel Order logo"
+                  width={40}
+                  height={40}
+                  className="h-10 w-10 object-cover"
+                  priority
+                />
+                <div className="min-w-0">
+                  <p className="truncate text-[16px] font-semibold leading-tight">
+                    {brandTitle}
+                  </p>
+                  <p className="truncate text-[12px] font-medium text-white/85">
+                    {brandSubtitle}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setSidebarOpen(false)}
+                className="flex items-center justify-center p-2 rounded-lg hover:bg-white/10 transition"
+                aria-label="Close menu"
+              >
+                <X className="h-6 w-6" />
+              </button>
+            </div>
+
+            {/* Desktop Logo - Hidden on Mobile */}
+            <div className="hidden lg:flex items-center gap-1 px-1">
               <Image
                 src="/da_logo.png"
                 alt="Travel Order logo"
@@ -95,6 +162,7 @@ export function RoleShell({
                   key={item.key}
                   item={item}
                   active={item.key === activeItem}
+                  onClick={() => setSidebarOpen(false)}
                 />
               ))}
             </SidebarSection>
@@ -108,6 +176,7 @@ export function RoleShell({
                     key={item.key}
                     item={item}
                     active={item.key === activeItem}
+                    onClick={() => setSidebarOpen(false)}
                   />
                 ))}
               </SidebarSection>
@@ -146,7 +215,7 @@ export function RoleShell({
 
         <div className="min-w-0 flex-1 flex flex-col lg:min-h-0 lg:h-dvh">
           {headerAction ? (
-            <div className="px-4 pt-4 sm:px-8 lg:px-10 lg:pt-5">
+            <div className="hidden lg:block px-4 pt-4 sm:px-8 lg:px-10 lg:pt-5">
               <div className="flex items-center justify-end">{headerAction}</div>
             </div>
           ) : null}
@@ -179,9 +248,11 @@ function SidebarSection({ label, className, children }: SidebarSectionProps) {
 function SidebarNavItem({
   item,
   active,
+  onClick,
 }: Readonly<{
   item: RoleShellNavItem;
   active: boolean;
+  onClick?: () => void;
 }>) {
   const classes = [
     "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[13px] font-medium transition",
@@ -205,7 +276,11 @@ function SidebarNavItem({
   }
 
   return (
-    <Link href={item.href} className={classes}>
+    <Link
+      href={item.href}
+      className={classes}
+      onClick={onClick}
+    >
       {icon}
       <span>{item.label}</span>
     </Link>

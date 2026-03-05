@@ -1,11 +1,16 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useCallback, useRef, useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { ArrowLeft } from "lucide-react";
 import { FormSectionSkeleton } from "@/src/components/ui/skeleton";
 import { SelectField } from "@/src/components/ui/select-field";
+
+type FieldError = {
+  field: string;
+  message: string;
+};
 
 const TravelScheduleFields = dynamic(
   () => import("@/src/components/regular/travel-orders/travel-order-schedule-and-staff-fields").then((mod) => ({ default: mod.TravelScheduleFields })),
@@ -79,7 +84,6 @@ export default function CreateTravelOrderForm({
   dateFiledLabel,
   profile,
   profileReady,
-  onSubmit,
   initialError,
 }: Readonly<{
   dateFiledLabel: string;
@@ -91,7 +95,6 @@ export default function CreateTravelOrderForm({
     employmentStatusName: string | null;
   } | null;
   profileReady: boolean;
-  onSubmit: (formData: FormData) => Promise<void>;
   initialError?: string | null;
 }>) {
   const router = useRouter();
@@ -105,6 +108,90 @@ export default function CreateTravelOrderForm({
   const lookupsRequestInFlightRef = useRef(false);
   const formRef = useRef<HTMLFormElement>(null);
   const formId = "create-travel-order-form";
+
+  // Field-level error state
+  const [fieldErrors, setFieldErrors] = useState<FieldError[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [generalError, setGeneralError] = useState<string | null>(null);
+
+  // Review modal state
+  const [showReviewModal, setShowReviewModal] = useState(false);
+  const [reviewData, setReviewData] = useState<{
+    travelType: string;
+    transportation: string;
+    program: string;
+    recommendingApprover: string;
+    objectives: string;
+    fundingSource: string;
+    remarks: string;
+    tripsJson: string;
+    hasOtherStaff: boolean;
+  } | null>(null);
+
+  // Helper function to get error for a specific field
+  const getFieldError = useCallback((fieldName: string): string | undefined => {
+    const error = fieldErrors.find(e => e.field === fieldName);
+    return error?.message;
+  }, [fieldErrors]);
+
+  // Collect form data for review modal
+  const collectReviewData = useCallback(() => {
+    if (!formRef.current || !lookups) return null;
+
+    const formData = new FormData(formRef.current);
+
+    const getSelectLabel = (name: string, options: readonly TravelOrderLookupOption[]) => {
+      const value = formData.get(name);
+      const option = options.find(o => o.id.toString() === value);
+      return option?.name || "Not selected";
+    };
+
+    const tripsJsonInput = formRef.current.querySelector('[name="tripsJson"]') as HTMLInputElement | null;
+    const hasOtherStaffCheckbox = formRef.current.querySelector('[name="hasOtherStaff"]') as HTMLInputElement | null;
+
+    return {
+      travelType: getSelectLabel("travelTypeId", lookups.travelTypes),
+      transportation: getSelectLabel("transportationId", lookups.transportations),
+      program: getSelectLabel("programId", lookups.programs),
+      recommendingApprover: getSelectLabel("recommendingApproverId", lookups.recommendingApprovers),
+      objectives: formData.get("objectives") as string || "",
+      fundingSource: formData.get("fundingSource") as string || "",
+      remarks: formData.get("remarks") as string || "",
+      tripsJson: tripsJsonInput?.value || "[]",
+      hasOtherStaff: hasOtherStaffCheckbox?.checked || false,
+    };
+  }, [lookups]);
+
+  // Handle submit for approval button click - show review modal
+  const handleSubmitForApprovalClick = useCallback(() => {
+    const data = collectReviewData();
+    setReviewData(data);
+    setShowReviewModal(true);
+  }, [collectReviewData]);
+
+  // Handle confirm submission from review modal
+  const handleConfirmSubmission = useCallback(() => {
+    setShowReviewModal(false);
+    // Programmatically submit the form with actionType="submit"
+    const form = formRef.current;
+    if (form) {
+      const submitEvent = new Event("submit", { bubbles: true, cancelable: true });
+      Object.defineProperty(submitEvent, "target", { value: form });
+      // Set the actionType to submit
+      const actionInput = document.createElement("input");
+      actionInput.type = "hidden";
+      actionInput.name = "actionType";
+      actionInput.value = "submit";
+      form.appendChild(actionInput);
+      form.dispatchEvent(submitEvent);
+      form.removeChild(actionInput);
+    }
+  }, []);
+
+  // Handle go back to edit from review modal
+  const handleGoBackToEdit = useCallback(() => {
+    setShowReviewModal(false);
+  }, []);
 
   const hasBlockingProfileIssue = !profileReady;
   const hasBlockingLookupIssue = lookupsState === "ready" && !hasRequiredLookups;
@@ -221,13 +308,66 @@ export default function CreateTravelOrderForm({
   }, []);
 
   const handleFormSubmit = useCallback(
-    (event: React.FormEvent<HTMLFormElement>) => {
+    async (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+
       if (lookupsState !== "ready") {
         event.preventDefault();
         void loadLookups();
+        return;
+      }
+
+      const form = event.currentTarget;
+      const formData = new FormData(form);
+
+      // Get trips from the hidden input
+      const tripsJsonInput = form.querySelector('[name="tripsJson"]') as HTMLInputElement | null;
+      if (tripsJsonInput) {
+        formData.set("tripsJson", tripsJsonInput.value);
+      }
+
+      setIsSubmitting(true);
+      setFieldErrors([]);
+      setGeneralError(null);
+
+      try {
+        const response = await fetch("/api/regular/travel-orders/create", {
+          method: "POST",
+          body: formData,
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+          if (result.errors && Array.isArray(result.errors)) {
+            setFieldErrors(result.errors);
+
+            // Scroll to first error
+            const firstError = result.errors[0];
+            if (firstError) {
+              const errorElement = form.querySelector(`[name="${firstError.field}"]`) ||
+                form.querySelector('[name="tripsJson"]');
+              if (errorElement) {
+                errorElement.scrollIntoView({ behavior: "smooth", block: "center" });
+              }
+            }
+          } else {
+            setGeneralError(result.errors?.[0]?.message || "An error occurred. Please try again.");
+          }
+          return;
+        }
+
+        // Success - clear draft and redirect
+        localStorage.removeItem(STORAGE_KEY);
+        router.push(result.redirectUrl || "/regular/travel-orders");
+      } catch (error) {
+        console.error("Form submission error:", error);
+        setGeneralError("An unexpected error occurred. Please try again.");
+      } finally {
+        setIsSubmitting(false);
       }
     },
-    [loadLookups, lookupsState],
+    [loadLookups, lookupsState, router],
   );
 
   const handleBack = () => {
@@ -281,6 +421,91 @@ export default function CreateTravelOrderForm({
         </div>
       )}
 
+      {/* Review Modal */}
+      {showReviewModal && reviewData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/30"
+            onClick={handleGoBackToEdit}
+          />
+          <div className="relative z-10 w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
+            <h3 className="text-xl font-semibold text-[#2f3339]">
+              Review
+            </h3>
+            <p className="mt-1 text-sm text-[#5d6780]">
+              Please review your travel order details before submitting.
+            </p>
+
+            <div className="mt-6 space-y-4">
+              {/* Travel Details Section */}
+              <div className="rounded-lg border border-[#dfe1ed] bg-[#fafbfe] p-4">
+                <h4 className="text-sm font-semibold uppercase tracking-[0.08em] text-[#5d6780]">
+                  Travel Details
+                </h4>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <ReviewField label="Type of Travel" value={reviewData.travelType} />
+                  <ReviewField label="Means of Transportation" value={reviewData.transportation} />
+                  <ReviewField label="Name of Program/Project" value={reviewData.program} />
+                  <ReviewField label="Recommending Approval (Step 1)" value={reviewData.recommendingApprover} />
+                </div>
+              </div>
+
+              {/* Objectives and Funding */}
+              <div className="rounded-lg border border-[#dfe1ed] bg-[#fafbfe] p-4">
+                <h4 className="text-sm font-semibold uppercase tracking-[0.08em] text-[#5d6780]">
+                  Objectives & Funding
+                </h4>
+                <div className="mt-3 space-y-3">
+                  <ReviewField label="Objective(s)" value={reviewData.objectives || "-"} />
+                  <ReviewField label="Funding Source" value={reviewData.fundingSource || "-"} />
+                  <ReviewField label="Remarks / Special Instructions" value={reviewData.remarks || "-"} />
+                </div>
+              </div>
+
+              {/* Trips Section */}
+              <div className="rounded-lg border border-[#dfe1ed] bg-[#fafbfe] p-4">
+                <h4 className="text-sm font-semibold uppercase tracking-[0.08em] text-[#5d6780]">
+                  Trip Destinations
+                </h4>
+                <div className="mt-3">
+                  <TripsReview tripsJson={reviewData.tripsJson} />
+                </div>
+              </div>
+
+              {/* Other Staff */}
+              {reviewData.hasOtherStaff && (
+                <div className="rounded-lg border border-[#dfe1ed] bg-[#fafbfe] p-4">
+                  <h4 className="text-sm font-semibold uppercase tracking-[0.08em] text-[#5d6780]">
+                    Other Staff
+                  </h4>
+                  <p className="mt-2 text-sm text-[#2f3339]">
+                    Additional staff members are included in this travel order.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={handleGoBackToEdit}
+                className="inline-flex cursor-pointer items-center justify-center rounded-lg border border-[#dfe1ed] bg-white px-4 py-2.5 text-sm font-semibold text-[#5d6780] transition hover:bg-[#f3f5fa]"
+              >
+                Go back to edit
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmSubmission}
+                disabled={isSubmitting}
+                className="inline-flex cursor-pointer items-center justify-center rounded-lg bg-[#3B9F41] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#359436] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSubmitting ? "Submitting..." : "Confirm"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <button
         type="button"
         onClick={handleBack}
@@ -297,9 +522,9 @@ export default function CreateTravelOrderForm({
           (step 2).
         </p>
 
-        {initialError ? (
+        {initialError || generalError ? (
           <div className="mt-4 rounded-lg border border-[#ffcece] bg-[#fff3f3] px-3 py-2 text-sm text-[#a33a3a]">
-            {initialError}
+            {generalError || initialError}
           </div>
         ) : null}
 
@@ -328,7 +553,6 @@ export default function CreateTravelOrderForm({
         <form
           id={formId}
           ref={formRef}
-          action={onSubmit}
           className="mt-6 space-y-6"
           onChange={handleFormChange}
           onSubmit={handleFormSubmit}
@@ -366,12 +590,16 @@ export default function CreateTravelOrderForm({
             <TravelDetailsSection
               disabled={!canEdit}
               lookups={lookups}
+              fieldErrors={fieldErrors}
             />
           ) : null}
 
-          <AttachmentsSection disabled={!canEdit} />
+          <ScheduleStatusSection
+            disabled={!canEdit}
+            tripError={getFieldError("trips")}
+          />
 
-          <ScheduleStatusSection disabled={!canEdit} />
+          <AttachmentsSection disabled={!canEdit} />
 
           {!canSubmit ? (
             <p className="text-xs text-[#7d8598]">
@@ -384,19 +612,18 @@ export default function CreateTravelOrderForm({
               type="submit"
               name="actionType"
               value="draft"
-              disabled={!canEdit}
+              disabled={!canEdit || isSubmitting}
               className="inline-flex h-10 items-center justify-center rounded-lg border border-[#dfe1ed] bg-white px-4 text-sm font-semibold text-[#5d6780] transition hover:bg-[#f3f5fa] disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
             >
-              Save as Draft
+              {isSubmitting ? "Saving..." : "Save as Draft"}
             </button>
             <button
-              type="submit"
-              name="actionType"
-              value="submit"
-              disabled={!canEdit}
+              type="button"
+              onClick={handleSubmitForApprovalClick}
+              disabled={!canEdit || isSubmitting}
               className="inline-flex h-10 items-center justify-center rounded-lg bg-[#3B9F41] px-4 text-sm font-semibold text-white transition hover:bg-[#359436] disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
             >
-              Submit for Approval
+              {isSubmitting ? "Submitting..." : "Submit for Approval"}
             </button>
           </div>
         </form>
@@ -456,10 +683,14 @@ function RequesterDetailsSection({
 function TravelDetailsSection({
   lookups,
   disabled,
+  fieldErrors,
 }: Readonly<{
   lookups: CreateTravelOrderLookups;
   disabled: boolean;
+  fieldErrors: FieldError[];
 }>) {
+  const getError = (field: string) => fieldErrors.find(e => e.field === field)?.message;
+
   return (
     <section className="rounded-xl border border-[#dfe1ed] bg-white p-4">
       <h3 className="text-sm font-semibold uppercase tracking-[0.08em] text-[#5d6780]">
@@ -473,6 +704,7 @@ function TravelDetailsSection({
           includeEmptyOption
           emptyOptionLabel="- Select Type of Travel -"
           disabled={disabled}
+          error={getError("travelTypeId")}
         />
         <SelectField
           name="transportationId"
@@ -481,6 +713,7 @@ function TravelDetailsSection({
           includeEmptyOption
           emptyOptionLabel="- Select Means of Transportation -"
           disabled={disabled}
+          error={getError("transportationId")}
         />
         <SelectField
           name="programId"
@@ -489,6 +722,7 @@ function TravelDetailsSection({
           includeEmptyOption
           emptyOptionLabel="- Select Name of Program/Project -"
           disabled={disabled}
+          error={getError("programId")}
         />
         <SelectField
           name="recommendingApproverId"
@@ -497,34 +731,34 @@ function TravelDetailsSection({
           includeEmptyOption
           emptyOptionLabel="- Select Recommending Approval -"
           disabled={disabled}
+          error={getError("recommendingApproverId")}
         />
       </div>
 
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
-        <TextareaField
-          name="locationVenue"
-          label="Location / Venue"
-          rows={3}
-          disabled={disabled}
-        />
         <TextareaField
           name="objectives"
           label="Objective(s)"
           rows={3}
           maxLength={120}
           disabled={disabled}
+          error={getError("objectives")}
         />
         <InputField
           name="fundingSource"
           label="Funding Source"
           placeholder="e.g. DA Region 10 Program Budget"
+          maxLength={120}
           disabled={disabled}
+          error={getError("fundingSource")}
         />
         <TextareaField
           name="remarks"
           label="Remarks / Special Instructions"
           rows={3}
+          maxLength={120}
           disabled={disabled}
+          error={getError("remarks")}
         />
       </div>
       <p className="mt-3 text-xs text-[#7d8598]">
@@ -559,8 +793,10 @@ function AttachmentsSection({
 
 function ScheduleStatusSection({
   disabled,
+  tripError,
 }: Readonly<{
   disabled: boolean;
+  tripError?: string;
 }>) {
   return (
     <section className="rounded-xl border border-[#dfe1ed] bg-white p-4">
@@ -571,11 +807,18 @@ function ScheduleStatusSection({
         <TravelScheduleFields disabled={disabled} />
       </div>
 
+      {tripError && (
+        <div className="mt-3 rounded-lg border border-[#ffcece] bg-[#fff3f3] px-3 py-2 text-sm text-[#a33a3a]">
+          {tripError}
+        </div>
+      )}
+
       <div className="mt-4 space-y-4">
         <InputField
           name="travelStatusRemarks"
           label="Travel Status Remarks"
           placeholder="Optional remarks about current status"
+          maxLength={120}
           disabled={disabled}
         />
         <OtherStaffFields disabled={disabled} />
@@ -616,8 +859,10 @@ function InputField({
   type = "text",
   min,
   max,
+  maxLength,
   required,
   disabled,
+  error,
 }: Readonly<{
   name: string;
   label: string;
@@ -625,9 +870,13 @@ function InputField({
   type?: "text" | "date" | "number";
   min?: number;
   max?: number;
+  maxLength?: number;
   required?: boolean;
   disabled?: boolean;
+  error?: string;
 }>) {
+  const hasError = Boolean(error);
+
   return (
     <FieldWrapper label={label}>
       <input
@@ -636,10 +885,17 @@ function InputField({
         placeholder={placeholder}
         min={min}
         max={max}
+        maxLength={maxLength}
         required={required}
         disabled={disabled}
-        className="h-10 w-full rounded-lg border border-[#dfe1ed] bg-white px-3 text-sm text-[#2f3339] outline-none focus:border-[#3B9F41] focus:ring-1 focus:ring-[#3B9F41] disabled:cursor-not-allowed disabled:bg-[#f8f9fc] disabled:text-[#8b92a7]"
+        className={`h-10 w-full rounded-lg border bg-white px-3 text-sm outline-none transition-all
+          ${hasError
+            ? "border-[#dc2626] ring-1 ring-[#dc2626] focus:border-[#dc2626] focus:ring-[#dc2626]"
+            : "border-[#dfe1ed] focus:border-[#3B9F41] focus:ring-1 focus:ring-[#3B9F41]"
+          }
+          disabled:cursor-not-allowed disabled:bg-[#f8f9fc] disabled:text-[#8b92a7]`}
       />
+      {error && <p className="mt-1 text-xs text-[#dc2626]">{error}</p>}
     </FieldWrapper>
   );
 }
@@ -678,6 +934,7 @@ function TextareaField({
   required,
   disabled,
   maxLength,
+  error,
 }: Readonly<{
   name: string;
   label: string;
@@ -685,8 +942,10 @@ function TextareaField({
   required?: boolean;
   disabled?: boolean;
   maxLength?: number;
+  error?: string;
 }>) {
   const [charCount, setCharCount] = useState(0);
+  const hasError = Boolean(error);
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setCharCount(e.target.value.length);
@@ -702,7 +961,12 @@ function TextareaField({
           disabled={disabled}
           onChange={handleChange}
           maxLength={maxLength}
-          className="w-full rounded-lg border border-[#dfe1ed] bg-white px-3 py-2 text-sm text-[#2f3339] outline-none focus:border-[#3B9F41] focus:ring-1 focus:ring-[#3B9F41] disabled:cursor-not-allowed disabled:bg-[#f8f9fc] disabled:text-[#8b92a7] resize-none"
+          className={`w-full rounded-lg border bg-white px-3 py-2 text-sm outline-none transition-all resize-none
+            ${hasError
+              ? "border-[#dc2626] ring-1 ring-[#dc2626] focus:border-[#dc2626] focus:ring-[#dc2626]"
+              : "border-[#dfe1ed] focus:border-[#3B9F41] focus:ring-1 focus:ring-[#3B9F41]"
+            }
+            disabled:cursor-not-allowed disabled:bg-[#f8f9fc] disabled:text-[#8b92a7]`}
         />
         {maxLength ? (
           <div
@@ -717,7 +981,74 @@ function TextareaField({
             {charCount}/{maxLength} characters
           </div>
         ) : null}
+        {error && <p className="mt-1 text-xs text-[#dc2626]">{error}</p>}
       </div>
     </FieldWrapper>
+  );
+}
+
+// Review modal helper components
+function ReviewField({
+  label,
+  value,
+}: Readonly<{
+  label: string;
+  value: string;
+}>) {
+  return (
+    <div>
+      <span className="mb-1 block text-xs font-medium text-[#7d8598]">{label}</span>
+      <div className="rounded-lg border border-[#dfe1ed] bg-white px-3 py-2 text-sm text-[#2f3339]">
+        {value || "-"}
+      </div>
+    </div>
+  );
+}
+
+function TripsReview({
+  tripsJson,
+}: Readonly<{
+  tripsJson: string;
+}>) {
+  const trips = useMemo(() => {
+    try {
+      return JSON.parse(tripsJson) as Array<{
+        dateFrom: string;
+        dateTo: string;
+        destination: string;
+        purpose: string;
+      }>;
+    } catch {
+      return [];
+    }
+  }, [tripsJson]);
+
+  if (!trips || trips.length === 0) {
+    return (
+      <p className="text-sm text-[#5d6780]">No trips added.</p>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {trips.map((trip, index) => (
+        <div key={index} className="rounded-lg border border-[#dfe1ed] bg-white p-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-[#2f3339]">Trip {index + 1}</span>
+            <span className="text-xs text-[#7d8598]">
+              {trip.dateFrom} - {trip.dateTo}
+            </span>
+          </div>
+          <div className="mt-2">
+            <span className="block text-xs font-medium text-[#7d8598]">Destination</span>
+            <span className="text-sm text-[#2f3339]">{trip.destination || "-"}</span>
+          </div>
+          <div className="mt-2">
+            <span className="block text-xs font-medium text-[#7d8598]">Purpose</span>
+            <span className="text-sm text-[#2f3339]">{trip.purpose || "-"}</span>
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }

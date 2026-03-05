@@ -16,6 +16,7 @@ interface SelectFieldProps {
   includeEmptyOption?: boolean;
   emptyOptionLabel?: string;
   defaultValue?: number | string | null;
+  error?: string;
 }
 
 export function SelectField({
@@ -26,6 +27,7 @@ export function SelectField({
   includeEmptyOption,
   emptyOptionLabel = "None / Not Applicable",
   defaultValue,
+  error,
 }: SelectFieldProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -76,6 +78,8 @@ export function SelectField({
     ? emptyOptionLabel
     : "- Select " + label + " -";
 
+  const hasError = Boolean(error);
+
   return (
     <div ref={containerRef} className="relative">
       <label className="mb-1.5 block text-sm font-medium text-[#4a5266]">
@@ -85,11 +89,13 @@ export function SelectField({
         type="button"
         onClick={() => !disabled && setIsOpen(!isOpen)}
         disabled={disabled || options.length === 0}
-        className={`flex h-10 w-full cursor-pointer items-center justify-between rounded-lg border bg-white px-3 text-sm transition-all duration-200 
-          ${isOpen 
-            ? "border-[#3B9F41] ring-1 ring-[#3B9F41]" 
-            : "border-[#dfe1ed] hover:border-[#b8bcc9]"
-          } 
+        className={`flex h-10 w-full cursor-pointer items-center justify-between rounded-lg border bg-white px-3 text-sm transition-all duration-200
+          ${isOpen
+            ? "border-[#3B9F41] ring-1 ring-[#3B9F41]"
+            : hasError
+              ? "border-[#dc2626] ring-1 ring-[#dc2626]"
+              : "border-[#dfe1ed] hover:border-[#b8bcc9]"
+          }
           ${disabled ? "cursor-not-allowed bg-[#f8f9fc] text-[#8b92a7]" : "text-[#2f3339]"}
           ${selectedValue || includeEmptyOption ? "text-[#2f3339]" : "text-[#9ca3af]"}
         `}
@@ -167,6 +173,9 @@ export function SelectField({
             </div>
           </div>
         </div>
+      )}
+      {error && (
+        <p className="mt-1 text-xs text-[#dc2626]">{error}</p>
       )}
     </div>
   );

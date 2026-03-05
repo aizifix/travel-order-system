@@ -426,21 +426,25 @@ export function TripDestinationFields({
                   }}
                 />
 
-                <label className="block">
+                <label className="flex h-full flex-col">
                   <span className="mb-1.5 block text-sm font-medium text-[#4a5266]">
                     Specific Purpose
                   </span>
                   <textarea
-                    rows={2}
+                    rows={4}
                     required={!disabled}
                     disabled={disabled}
+                    maxLength={120}
                     value={trip.specificPurpose}
                     onChange={(event) => {
                       updateTripField(trip.id, "specificPurpose", event.target.value);
                     }}
                     placeholder="Purpose for this trip"
-                    className="w-full resize-none rounded-lg border border-[#dfe1ed] bg-white px-3 py-2 text-sm text-[#2f3339] outline-none focus:border-[#3B9F41] focus:ring-1 focus:ring-[#3B9F41] disabled:cursor-not-allowed disabled:bg-[#f8f9fc] disabled:text-[#8b92a7]"
+                    className="min-h-[8.5rem] w-full flex-1 resize-none rounded-lg border border-[#dfe1ed] bg-white px-3 py-2 text-sm text-[#2f3339] outline-none focus:border-[#3B9F41] focus:ring-1 focus:ring-[#3B9F41] disabled:cursor-not-allowed disabled:bg-[#f8f9fc] disabled:text-[#8b92a7]"
                   />
+                  <p className="mt-1 text-[11px] text-[#7d8598]">
+                    {trip.specificPurpose.length}/120 characters
+                  </p>
                 </label>
 
                 <div

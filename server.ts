@@ -88,7 +88,7 @@ async function bootstrap() {
       return;
     }
 
-    socket.setNoDelay(true);
+    (socket as import("node:net").Socket).setNoDelay(true);
     wsServer.handleUpgrade(request, socket, head, (ws) => {
       wsManager.addClient(session.userId, ws);
     });

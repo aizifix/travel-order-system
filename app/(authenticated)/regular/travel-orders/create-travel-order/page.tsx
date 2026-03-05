@@ -4,7 +4,6 @@ import { getRequesterTravelOrderProfile } from "@/src/server/travel-orders/servi
 import { RegularShell } from "@/src/components/regular/regular-shell";
 import { Breadcrumbs } from "@/src/components/ui/breadcrumbs";
 import CreateTravelOrderForm from "./create-travel-order-form";
-import { createRegularTravelOrderAction } from "../actions";
 
 export const dynamic = "force-dynamic";
 
@@ -81,7 +80,6 @@ export default async function RegularTravelOrderCreatePage({
               : null
           }
           profileReady={isProfileReady}
-          onSubmit={createRegularTravelOrderAction}
           initialError={error}
         />
       </div>

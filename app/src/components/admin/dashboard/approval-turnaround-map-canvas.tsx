@@ -2,18 +2,20 @@
 
 import { useEffect } from "react";
 import {
-  CircleMarker,
+  GeoJSON,
   MapContainer,
   TileLayer,
   Tooltip,
   useMap,
 } from "react-leaflet";
+import type { Feature, Geometry } from "geojson";
 
 export type ApprovalDestinationPoint = Readonly<{
   label: string;
   value: number;
   latitude: number;
   longitude: number;
+  boundaryGeojson: Geometry | null;
 }>;
 
 type ApprovalTurnaroundMapCanvasProps = Readonly<{
@@ -50,7 +52,7 @@ export function ApprovalTurnaroundMapCanvas({
   const maxValue = Math.max(1, ...points.map((point) => point.value));
 
   return (
-    <div className="approval-white-map h-[320px] w-full overflow-hidden rounded-lg border border-[#dfe1ed] bg-white">
+    <div className="approval-white-map h-[360px] w-full overflow-hidden rounded-lg border border-[#dfe1ed] bg-white xl:h-[420px]">
       <MapContainer
         center={PHILIPPINES_CENTER}
         zoom={5}
@@ -72,26 +74,42 @@ export function ApprovalTurnaroundMapCanvas({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {points.map((point) => (
-          <CircleMarker
-            key={`${point.label}-${point.latitude}-${point.longitude}`}
-            center={[point.latitude, point.longitude]}
-            radius={8 + Math.round((point.value / maxValue) * 6)}
-            pathOptions={{
-              color: "#1f6f38",
-              fillColor: "#2f8f3a",
-              fillOpacity: 0.85,
-              weight: 2,
-            }}
-          >
-            <Tooltip direction="top" offset={[0, -8]} opacity={1}>
-              <div className="px-1 py-0.5">
-                <p className="text-[12px] font-semibold text-[#2f3339]">{point.label}</p>
-                <p className="text-[11px] text-[#4a5266]">{point.value} submitted orders</p>
-              </div>
-            </Tooltip>
-          </CircleMarker>
-        ))}
+        {points.map((point) => {
+          if (!point.boundaryGeojson) {
+            return null;
+          }
+
+          const strength = point.value / maxValue;
+          const outlineWeight = 1.5 + strength * 2.25;
+          const boundaryFeature: Feature = {
+            type: "Feature",
+            properties: {
+              label: point.label,
+              value: point.value,
+            },
+            geometry: point.boundaryGeojson,
+          };
+
+          return (
+            <GeoJSON
+              key={`${point.label}-${point.latitude}-${point.longitude}`}
+              data={boundaryFeature}
+              style={{
+                color: "#146f38",
+                fillColor: "#2f9a52",
+                fillOpacity: 0.42 + strength * 0.26,
+                weight: outlineWeight + 1,
+              }}
+            >
+              <Tooltip direction="center" opacity={1} sticky>
+                <div className="px-1 py-0.5">
+                  <p className="text-[12px] font-semibold text-[#2f3339]">{point.label}</p>
+                  <p className="text-[11px] text-[#4a5266]">{point.value} submitted orders</p>
+                </div>
+              </Tooltip>
+            </GeoJSON>
+          );
+        })}
       </MapContainer>
     </div>
   );

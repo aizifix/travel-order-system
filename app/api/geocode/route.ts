@@ -1,15 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { Geometry } from "geojson";
 
 type Position = [number, number];
+type GeocodeResolution = Readonly<{
+  position: Position | null;
+  boundaryGeojson?: Geometry | null;
+}>;
 
 type GeocodeCacheEntry = Readonly<{
-  position: Position | null;
+  value: GeocodeResolution;
   timestamp: number;
 }>;
 
 type NominatimResult = Readonly<{
   lat?: string;
   lon?: string;
+  geojson?: unknown;
 }>;
 
 const GEOCODE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -136,12 +142,26 @@ function getCachedPosition(key: string): Position | null | undefined {
     return undefined;
   }
 
-  return cached.position;
+  return cached.value.position;
 }
 
-function setCachedPosition(key: string, position: Position | null): void {
+function getCachedBoundary(key: string): Geometry | null | undefined {
+  const cached = geocodeCache.get(key);
+  if (!cached) {
+    return undefined;
+  }
+
+  if (Date.now() - cached.timestamp > GEOCODE_CACHE_TTL_MS) {
+    geocodeCache.delete(key);
+    return undefined;
+  }
+
+  return cached.value.boundaryGeojson;
+}
+
+function setCachedResolution(key: string, resolution: GeocodeResolution): void {
   geocodeCache.set(key, {
-    position,
+    value: resolution,
     timestamp: Date.now(),
   });
 }
@@ -159,13 +179,65 @@ function parseCoordinate(rawValue: string | undefined): number | null {
   return parsed;
 }
 
-async function geocodeSingleCandidate(candidate: string): Promise<Position | null> {
+function isCoordinatePair(value: unknown): value is readonly [number, number] {
+  return (
+    Array.isArray(value) &&
+    value.length >= 2 &&
+    Number.isFinite(value[0]) &&
+    Number.isFinite(value[1])
+  );
+}
+
+function isPolygonCoordinates(value: unknown): value is number[][][] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (ring) => Array.isArray(ring) && ring.length > 0 && ring.every((point) => isCoordinatePair(point)),
+    )
+  );
+}
+
+function isMultiPolygonCoordinates(value: unknown): value is number[][][][] {
+  return (
+    Array.isArray(value) &&
+    value.every((polygon) => isPolygonCoordinates(polygon))
+  );
+}
+
+function parseBoundaryGeojson(value: unknown): Geometry | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const candidate = value as { type?: unknown; coordinates?: unknown };
+  if (candidate.type === "Polygon" && isPolygonCoordinates(candidate.coordinates)) {
+    return {
+      type: "Polygon",
+      coordinates: candidate.coordinates,
+    };
+  }
+
+  if (candidate.type === "MultiPolygon" && isMultiPolygonCoordinates(candidate.coordinates)) {
+    return {
+      type: "MultiPolygon",
+      coordinates: candidate.coordinates,
+    };
+  }
+
+  return null;
+}
+
+async function geocodeSingleCandidate(
+  candidate: string,
+  includeBoundary: boolean,
+): Promise<GeocodeResolution | null> {
   const searchParams = new URLSearchParams({
     q: candidate,
     format: "jsonv2",
-    limit: "1",
+    limit: includeBoundary ? "5" : "1",
     countrycodes: "ph",
     addressdetails: "0",
+    polygon_geojson: includeBoundary ? "1" : "0",
   });
 
   const response = await fetch(`${NOMINATIM_SEARCH_URL}?${searchParams.toString()}`, {
@@ -186,32 +258,70 @@ async function geocodeSingleCandidate(candidate: string): Promise<Position | nul
     return null;
   }
 
-  const topResult = payload[0] as NominatimResult;
-  const latitude = parseCoordinate(topResult.lat);
-  const longitude = parseCoordinate(topResult.lon);
-  if (latitude === null || longitude === null) {
-    return null;
-  }
+  let fallbackPosition: Position | null = null;
 
-  return [latitude, longitude];
-}
+  for (const item of payload) {
+    const result = item as NominatimResult;
+    const latitude = parseCoordinate(result.lat);
+    const longitude = parseCoordinate(result.lon);
+    if (latitude === null || longitude === null) {
+      continue;
+    }
 
-async function geocodeDestination(destination: string): Promise<Position | null> {
-  const queryCandidates = buildQueryCandidates(destination);
-  for (const candidate of queryCandidates) {
-    const position = await geocodeSingleCandidate(candidate);
-    if (position) {
-      return position;
+    if (!fallbackPosition) {
+      fallbackPosition = [latitude, longitude];
+    }
+
+    if (!includeBoundary) {
+      return {
+        position: [latitude, longitude],
+        boundaryGeojson: undefined,
+      };
+    }
+
+    const boundaryGeojson = parseBoundaryGeojson(result.geojson);
+    if (boundaryGeojson) {
+      return {
+        position: [latitude, longitude],
+        boundaryGeojson,
+      };
     }
   }
 
-  return null;
+  if (!fallbackPosition) {
+    return null;
+  }
+
+  return {
+    position: fallbackPosition,
+    boundaryGeojson: includeBoundary ? null : undefined,
+  };
+}
+
+async function geocodeDestination(
+  destination: string,
+  includeBoundary: boolean,
+): Promise<GeocodeResolution> {
+  const queryCandidates = buildQueryCandidates(destination);
+  for (const candidate of queryCandidates) {
+    const resolution = await geocodeSingleCandidate(candidate, includeBoundary);
+    if (resolution) {
+      return resolution;
+    }
+  }
+
+  return {
+    position: null,
+    boundaryGeojson: includeBoundary ? null : undefined,
+  };
 }
 
 export async function GET(request: NextRequest) {
   const destination = normalizeQuery(
     request.nextUrl.searchParams.get("destination") || "",
   );
+  const includeBoundary =
+    request.nextUrl.searchParams.get("includeBoundary") === "1";
   if (!destination) {
     return NextResponse.json(
       { success: false, error: "Missing required parameter: destination" },
@@ -221,24 +331,34 @@ export async function GET(request: NextRequest) {
 
   const cacheKey = normalizeText(destination);
   const cachedPosition = getCachedPosition(cacheKey);
-  if (cachedPosition !== undefined) {
+  const cachedBoundary = includeBoundary ? getCachedBoundary(cacheKey) : undefined;
+  const hasCachedBoundary = !includeBoundary || cachedBoundary !== undefined;
+  if (cachedPosition !== undefined && hasCachedBoundary) {
     return NextResponse.json({
       success: true,
       data: cachedPosition
-        ? { latitude: cachedPosition[0], longitude: cachedPosition[1] }
+        ? {
+            latitude: cachedPosition[0],
+            longitude: cachedPosition[1],
+            boundaryGeojson: includeBoundary ? (cachedBoundary ?? null) : null,
+          }
         : null,
       cached: true,
     });
   }
 
   try {
-    const position = await geocodeDestination(destination);
-    setCachedPosition(cacheKey, position);
+    const resolution = await geocodeDestination(destination, includeBoundary);
+    setCachedResolution(cacheKey, resolution);
 
     return NextResponse.json({
       success: true,
-      data: position
-        ? { latitude: position[0], longitude: position[1] }
+      data: resolution.position
+        ? {
+            latitude: resolution.position[0],
+            longitude: resolution.position[1],
+            boundaryGeojson: includeBoundary ? resolution.boundaryGeojson : null,
+          }
         : null,
       cached: false,
     });
